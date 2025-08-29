@@ -267,6 +267,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-    if not wait_for_api(args.api, args.wait_api):
-        print(f"[ERROR] Backend not reachable at {args.api}; use --wait-api or start the server.", file=sys.stderr)
-        return 3

@@ -131,18 +131,19 @@ def cmd_ingest_sonic(args):
 
 def cmd_export(args):
     script = ROOT / "tools" / "export_submissions.py"
-    run([
+    cmd = [
         sys.executable, str(script),
-        "--queries", args.queries,
         "--api", args.api,
         "--outdir", args.outdir,
         "--max-per-query", str(args.max_per_query),
         "--trake-prefer", args.trake_prefer,
         "--wait-api", str(args.wait_api),
-        *(["--text", args.text] if args.text else []),
-        *(["--task", args.task] if args.text else []),
-        *(["--name", args.name] if args.text else []),
-    ])
+    ]
+    if args.queries:
+        cmd += ["--queries", args.queries]
+    if args.text:
+        cmd += ["--text", args.text, "--task", args.task, "--name", args.name]
+    run(cmd)
 
 
 def cmd_zip(args):
