@@ -76,49 +76,49 @@ async def preload_model():
     print("Connected to Sonic")
     asr_folder = "./data_processing/raw/transcript/"
     app.text_data = {}
-
-    for file in os.listdir(asr_folder):
-        if file.endswith(".json"):
-            file_path = os.path.join(asr_folder, file)
-            vid_id = file.split(".")[0]
-            with open(
-                file_path, "r", encoding="utf-8"
-            ) as f:
-                data = json.load(f)["segments"]
+    if os.path.isdir(asr_folder):
+        for file in os.listdir(asr_folder):
+            if file.endswith(".json"):
+                file_path = os.path.join(asr_folder, file)
+                vid_id = file.split(".")[0]
+                with open(file_path, "r", encoding="utf-8") as f:
+                    data = json.load(f).get("segments", [])
                 app.text_data[vid_id] = {}
-
                 for segment in data:
-                    start = int(
-                        float(segment["start"]) * 25
-                    )
-                    app.text_data[vid_id][start] = segment[
-                        "text"
-                    ]    
+                    # Convert start seconds to frames (default 25 fps if missing)
+                    try:
+                        fps = float(segment.get("fps", 25))
+                        if fps <= 0:
+                            fps = 25.0
+                    except Exception:
+                        fps = 25.0
+                    start = int(float(segment.get("start", 0)) * fps)
+                    app.text_data[vid_id][start] = segment.get("text", "")
+        print(f"Loaded ASR transcripts from {asr_folder}")
+    else:
+        print(f"[INFO] ASR folder not found; skipping preload: {asr_folder}")
 
     heading_folder = "./data_processing/raw/headings_ocr/"
     app.heading_data = {}
-
-    for file in os.listdir(heading_folder):
-        if file.endswith(".json"):
-            file_path = os.path.join(heading_folder, file)
-            vid_id = file.split(".")[0]
-            with open(
-                file_path, "r", encoding="utf-8"
-            ) as f:
-                data = json.load(f)["segments"]
+    if os.path.isdir(heading_folder):
+        for file in os.listdir(heading_folder):
+            if file.endswith(".json"):
+                file_path = os.path.join(heading_folder, file)
+                vid_id = file.split(".")[0]
+                with open(file_path, "r", encoding="utf-8") as f:
+                    data = json.load(f).get("segments", [])
                 app.heading_data[vid_id] = {}
-
-                
-
                 for segment in data:
                     frame_list_str = utils.asc_list_compress(
-                    list(map(int, segment["frame_list"]))
-                )
+                        list(map(int, segment.get("frame_list", [])))
+                    )
                     frame_list = utils.asc_list_decompress(frame_list_str)
-
-                    app.heading_data[vid_id][frame_list[0]] = segment[
-                        "text"
-                    ]                  
+                    if not frame_list:
+                        continue
+                    app.heading_data[vid_id][frame_list[0]] = segment.get("text", "")
+        print(f"Loaded heading OCR from {heading_folder}")
+    else:
+        print(f"[INFO] Heading OCR folder not found; skipping preload: {heading_folder}")
 
 
 class Query(BaseModel):
@@ -264,5 +264,4 @@ class Respond(BaseModel):
 @app.post("/print_log")
 async def printLog(respond: Respond):
     utils.print_log(respond.text, "log.txt")
-
 
