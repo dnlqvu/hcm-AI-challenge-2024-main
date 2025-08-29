@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import numpy as np
 import json
 import pickle
@@ -10,6 +11,7 @@ from tqdm import tqdm
 class NitzcheCLIP:
     def __init__(self, feature_path):
         self.file_path_list, self.image_feature, self.youtube_link, self.fps = [], [], {}, {}
+        be_root = Path(__file__).resolve().parent
         for filename in tqdm(sorted(os.listdir(feature_path))):
             filepath = os.path.join(feature_path, filename)
             with open(filepath, "rb") as fp:
@@ -18,9 +20,9 @@ class NitzcheCLIP:
                 self.file_path_list.extend(file_path)
                 self.image_feature.append(image_feature)
         
-        meta_dir = './data/media-info'
+        meta_dir = be_root / 'data' / 'media-info'
         for filename in tqdm(sorted(os.listdir(meta_dir))):
-            filepath = os.path.join(meta_dir, filename)
+            filepath = meta_dir / filename
             video_id = filename.split('.')[0]
             with open(filepath, 'r') as file:
                 data = json.load(file)

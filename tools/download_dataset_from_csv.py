@@ -247,6 +247,12 @@ def main() -> int:
         if args.extract and out_path.suffix.lower() == '.zip':
             try:
                 extract_zip(out_path, out_root, target_subdir=subdir)
+                # Remove archive after successful extraction to save space
+                try:
+                    out_path.unlink()
+                    print(f"Removed archive: {out_path.name}")
+                except Exception as e:
+                    print(f"[WARN] could not remove {out_path.name}: {e}")
             except Exception as e:
                 print(f"[ERROR] extract failed for {out_path}: {e}")
 
