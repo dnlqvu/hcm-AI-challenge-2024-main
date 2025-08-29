@@ -169,7 +169,8 @@ def main() -> int:
 
     produced = []
     for qf in txt_files:
-        task = infer_task_from_name(qf.stem)
+        # Ensure task detection uses the full filename (with .txt)
+        task = infer_task_from_name(qf.name)
         if task not in {"kis", "trake"}:
             # Skip non-target tasks (e.g., qa)
             continue
