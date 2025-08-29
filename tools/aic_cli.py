@@ -55,13 +55,67 @@ def cmd_pack_features(args):
 def cmd_serve(args):
     be_dir = Path(args.be_dir)
     if args.run:
-        cmd = [
-            sys.executable, "-m", "uvicorn", "main:app",
-            "--reload", "--host", "0.0.0.0", "--port", str(args.port),
-        ]
-        run(cmd, cwd=be_dir)
+        cmd = [sys.executable, "-m", "uvicorn", "main:app"]
+        if not args.no_reload:
+            cmd.append("--reload")
+        cmd += ["--host", "0.0.0.0", "--port", str(args.port)]
+        if args.daemon:
+            logfile = be_dir / args.logfile
+            pidfile = be_dir / args.pidfile
+            logfile.parent.mkdir(parents=True, exist_ok=True)
+            print("$ (daemon)", " ".join(cmd), f"cwd={be_dir}")
+            with open(logfile, "ab") as f:
+                p = subprocess.Popen(
+                    cmd,
+                    cwd=str(be_dir),
+                    stdout=f,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+            pidfile.write_text(str(p.pid))
+            print(f"Started uvicorn PID {p.pid} (logs: {logfile}, pidfile: {pidfile})")
+        else:
+            run(cmd, cwd=be_dir)
     else:
         print(f"Run: uvicorn main:app --reload --host 0.0.0.0 --port {args.port}  (in {be_dir})")
+
+
+def cmd_serve_stop(args):
+    be_dir = Path(args.be_dir)
+    pidfile = be_dir / args.pidfile
+    if not pidfile.exists():
+        print(f"No pidfile found: {pidfile}")
+        return
+    try:
+        pid = int(pidfile.read_text().strip())
+    except Exception:
+        print(f"Invalid pidfile: {pidfile}")
+        return
+    try:
+        os.kill(pid, 15)
+        print(f"Sent SIGTERM to PID {pid}")
+    except ProcessLookupError:
+        print(f"Process not found: {pid}")
+    except Exception as e:
+        print(f"Failed to stop PID {pid}: {e}")
+    try:
+        pidfile.unlink()
+    except Exception:
+        pass
+
+
+def cmd_serve_status(args):
+    be_dir = Path(args.be_dir)
+    pidfile = be_dir / args.pidfile
+    if not pidfile.exists():
+        print("stopped")
+        return
+    try:
+        pid = int(pidfile.read_text().strip())
+        os.kill(pid, 0)
+        print(f"running (PID {pid})")
+    except Exception:
+        print("stale pidfile")
 
 
 def cmd_ingest_sonic(args):
@@ -154,7 +208,23 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--be-dir", default=str(ROOT / "aic-24-BE"))
     sp.add_argument("--port", type=int, default=8000)
     sp.add_argument("--run", action="store_true", help="Run uvicorn in foreground")
+    sp.add_argument("--daemon", action="store_true", help="Run uvicorn in background and write pidfile")
+    sp.add_argument("--no-reload", action="store_true", help="Disable --reload (recommended in daemon mode)")
+    sp.add_argument("--logfile", default="uvicorn.log")
+    sp.add_argument("--pidfile", default="uvicorn.pid")
     sp.set_defaults(func=cmd_serve)
+
+    # serve-stop
+    sp = sub.add_parser("serve-stop", help="Stop uvicorn using pidfile")
+    sp.add_argument("--be-dir", default=str(ROOT / "aic-24-BE"))
+    sp.add_argument("--pidfile", default="uvicorn.pid")
+    sp.set_defaults(func=cmd_serve_stop)
+
+    # serve-status
+    sp = sub.add_parser("serve-status", help="Report uvicorn status via pidfile")
+    sp.add_argument("--be-dir", default=str(ROOT / "aic-24-BE"))
+    sp.add_argument("--pidfile", default="uvicorn.pid")
+    sp.set_defaults(func=cmd_serve_status)
 
     # ingest-sonic
     sp = sub.add_parser("ingest-sonic", help="Start Sonic (optional) and ingest ASR/heading")
