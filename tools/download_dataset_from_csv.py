@@ -26,14 +26,27 @@ def parse_csv(path: Path) -> List[Dict[str, str]]:
             norm = { (k or '').strip().lower(): (v or '').strip() for k, v in row.items() }
             # expected keys: url, name (filename), subdir (optional), md5/sha256 (optional)
             if not norm.get('url'):
-                # try other aliases
-                for k in ('link', 'download', 'href'):
+                # try other aliases commonly seen
+                for k in ('url', 'link', 'download', 'href', 'download link', 'download_link'):
                     if norm.get(k):
                         norm['url'] = norm[k]
                         break
+            # filename
             if not norm.get('name'):
-                # use filename from URL path
-                norm['name'] = derive_filename_from_url(norm.get('url', ''))
+                # try common filename headers
+                for k in ('name', 'filename', 'filenames', 'file'):
+                    if norm.get(k):
+                        norm['name'] = norm[k]
+                        break
+                # otherwise use filename from URL path
+                if not norm.get('name'):
+                    norm['name'] = derive_filename_from_url(norm.get('url', ''))
+            # subdir (optional)
+            if not norm.get('subdir'):
+                for k in ('subdir', 'folder', 'dir', 'target', 'extract_dir'):
+                    if norm.get(k):
+                        norm['subdir'] = norm[k]
+                        break
             rows.append(norm)
     return rows
 
@@ -220,4 +233,3 @@ def main() -> int:
 
 if __name__ == '__main__':
     raise SystemExit(main())
-
