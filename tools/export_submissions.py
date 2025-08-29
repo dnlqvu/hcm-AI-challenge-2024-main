@@ -3,7 +3,11 @@
 Export competition submissions (KIS + TRAKE) for AIC‑25 from query text files.
 
 Usage examples:
+  # Batch mode (folder of files)
   python tools/export_submissions.py --queries ./queries_round_1 --api http://localhost:8000 --outdir submission
+
+  # Single query (inline text, no files needed)
+  python tools/export_submissions.py --text "your query here" --task kis --outdir submission --name query-cli
 
 Conventions:
   - Query files are named like: query-1-kis.txt, query-4-trake.txt
@@ -51,6 +55,37 @@ def http_post_json(url: str, payload: dict, timeout: int = 60) -> dict:
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def wait_for_api(api_base: str, total_seconds: int = 0) -> bool:
+    """Optionally wait for the backend to be reachable.
+
+    Tries GET /docs (or /openapi.json) until success or timeout expires.
+    Returns True if reachable, False otherwise.
+    """
+    if total_seconds <= 0:
+        return True
+    import time
+    url_docs = api_base.rstrip("/") + "/docs"
+    url_openapi = api_base.rstrip("/") + "/openapi.json"
+    deadline = time.time() + total_seconds
+    while time.time() < deadline:
+        try:
+            if requests is not None:
+                r = requests.get(url_docs, timeout=2)
+                if r.status_code < 500:
+                    return True
+                r = requests.get(url_openapi, timeout=2)
+                if r.status_code == 200:
+                    return True
+            else:
+                with urllib.request.urlopen(url_docs, timeout=2) as resp:
+                    if resp.status < 500:
+                        return True
+        except Exception:
+            pass
+        time.sleep(1)
+    return False
 
 
 def slurp_query_file(path: Path) -> str:
@@ -149,30 +184,65 @@ def write_csv_trake(path: Path, sequences: Iterable[Tuple[str, List[int]]]) -> N
 
 def main() -> int:
     p = argparse.ArgumentParser(description="Export AIC‑25 submissions for KIS/TRAKE.")
-    p.add_argument("--queries", type=str, required=True, help="Directory containing query-*-kis.txt and query-*-trake.txt")
+    # Batch mode (directory of files)
+    p.add_argument("--queries", type=str, help="Directory containing query-*-kis.txt and query-*-trake.txt")
+    # Single mode (inline)
+    p.add_argument("--text", type=str, help="Inline query text (bypasses --queries)")
+    p.add_argument("--task", choices=["kis", "trake"], default="kis", help="Task for inline --text mode (default: %(default)s)")
+    p.add_argument("--name", type=str, default="query-cli", help="Base filename without extension for inline mode (default: %(default)s)")
     p.add_argument("--api", type=str, default="http://localhost:8000", help="Base URL of aic-24-BE backend (default: %(default)s)")
     p.add_argument("--outdir", type=str, default="submission", help="Output directory for CSVs (default: %(default)s)")
     p.add_argument("--max-per-query", type=int, default=100, help="Max lines per CSV (default: %(default)s)")
     p.add_argument("--trake-prefer", type=str, choices=["asr", "heading"], default="asr", help="Prefer ASR or heading search for TRAKE (default: %(default)s)")
+    p.add_argument("--wait-api", type=int, default=0, help="Wait up to N seconds for the backend API to become reachable before exporting")
     args = p.parse_args()
 
-    qdir = Path(args.queries)
     outdir = Path(args.outdir)
+
+    # Wait for backend if requested
+    if not wait_for_api(args.api, args.wait_api):
+        print(f"[ERROR] Backend not reachable at {args.api}; use --wait-api or start the server.", file=sys.stderr)
+        return 3
+
+    # Inline single-query mode
+    if args.text:
+        text = re.sub(r"\s+", " ", args.text.strip())
+        stem = args.name.strip() or "query-cli"
+        # Append task suffix to mirror convention
+        if not stem.endswith(f"-{args.task}"):
+            stem = f"{stem}-{args.task}"
+        out_csv = outdir / f"{stem}.csv"
+        try:
+            if args.task == "kis":
+                pairs = export_kis(args.api, text, args.max_per_query)
+                write_csv_kis(out_csv, pairs)
+                print(f"[KIS] Wrote {len(pairs)} lines -> {out_csv}")
+            else:
+                seqs = export_trake(args.api, text, args.max_per_query, prefer=args.trake_prefer)
+                write_csv_trake(out_csv, seqs)
+                print(f"[TRAKE] Wrote {len(seqs)} lines -> {out_csv}")
+        except Exception as e:
+            print(f"[ERROR] Failed for inline query: {e}", file=sys.stderr)
+            return 1
+        print(f"Done. Zip the '{outdir.name}' folder for submission.")
+        return 0
+
+    # Batch directory mode
+    if not args.queries:
+        print("[ERROR] Provide --queries for batch mode or --text for inline mode.", file=sys.stderr)
+        return 2
+    qdir = Path(args.queries)
     if not qdir.is_dir():
         print(f"[ERROR] Queries directory not found: {qdir}", file=sys.stderr)
         return 2
-
     txt_files = sorted(qdir.glob("*.txt"))
     if not txt_files:
         print(f"[ERROR] No .txt query files found in {qdir}", file=sys.stderr)
         return 2
-
     produced = []
     for qf in txt_files:
-        # Ensure task detection uses the full filename (with .txt)
         task = infer_task_from_name(qf.name)
         if task not in {"kis", "trake"}:
-            # Skip non-target tasks (e.g., qa)
             continue
         query_text = slurp_query_file(qf)
         out_csv = outdir / f"{qf.stem}.csv"
@@ -181,14 +251,13 @@ def main() -> int:
                 pairs = export_kis(args.api, query_text, args.max_per_query)
                 write_csv_kis(out_csv, pairs)
                 print(f"[KIS] Wrote {len(pairs)} lines -> {out_csv}")
-            elif task == "trake":
+            else:
                 seqs = export_trake(args.api, query_text, args.max_per_query, prefer=args.trake_prefer)
                 write_csv_trake(out_csv, seqs)
                 print(f"[TRAKE] Wrote {len(seqs)} lines -> {out_csv}")
             produced.append(out_csv)
         except Exception as e:
             print(f"[ERROR] Failed for {qf.name}: {e}", file=sys.stderr)
-
     if not produced:
         print("[WARN] No outputs produced. Ensure filenames end with -kis.txt or -trake.txt.")
         return 1
@@ -198,3 +267,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+    if not wait_for_api(args.api, args.wait_api):
+        print(f"[ERROR] Backend not reachable at {args.api}; use --wait-api or start the server.", file=sys.stderr)
+        return 3

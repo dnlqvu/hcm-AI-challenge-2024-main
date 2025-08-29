@@ -138,6 +138,10 @@ def cmd_export(args):
         "--outdir", args.outdir,
         "--max-per-query", str(args.max_per_query),
         "--trake-prefer", args.trake_prefer,
+        "--wait-api", str(args.wait_api),
+        *(["--text", args.text] if args.text else []),
+        *(["--task", args.task] if args.text else []),
+        *(["--name", args.name] if args.text else []),
     ])
 
 
@@ -235,11 +239,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     # export
     sp = sub.add_parser("export", help="Export KIS/TRAKE CSVs from query files")
-    sp.add_argument("--queries", required=True)
+    sp.add_argument("--queries")
+    sp.add_argument("--text", help="Inline query text (bypass --queries)")
+    sp.add_argument("--task", choices=["kis", "trake"], default="kis")
+    sp.add_argument("--name", default="query-cli")
     sp.add_argument("--api", default="http://localhost:8000")
     sp.add_argument("--outdir", default="submission")
     sp.add_argument("--max-per-query", type=int, default=100)
     sp.add_argument("--trake-prefer", choices=["asr", "heading"], default="asr")
+    sp.add_argument("--wait-api", type=int, default=15, help="Wait up to N seconds for the backend to be reachable before exporting")
     sp.set_defaults(func=cmd_export)
 
     # zip-submission

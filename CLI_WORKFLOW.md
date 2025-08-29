@@ -48,10 +48,16 @@ What it does:
 - Builds model pickle `aic-24-BE/models/clip_vit_b32_nitzche.pkl` and updates `.env`
 
 ## 3) Start the Backend API
+Foreground:
 ```
 python tools/aic_cli.py serve --be-dir hcm-AI-challenge-2024-main/aic-24-BE --port 8000 --run
 ```
-
+Background (recommended in CI/Colab/terminals):
+```
+python tools/aic_cli.py serve --be-dir hcm-AI-challenge-2024-main/aic-24-BE --port 8000 --run --daemon --no-reload
+python tools/aic_cli.py serve-status
+tail -n 120 hcm-AI-challenge-2024-main/aic-24-BE/uvicorn.log
+```
 The API serves on `http://localhost:8000`.
 
 ## 4) Enable TRAKE (if you have transcripts/headings)
@@ -64,12 +70,16 @@ Start Sonic and ingest:
 python tools/aic_cli.py ingest-sonic --be-dir hcm-AI-challenge-2024-main/aic-24-BE --up --heading
 ```
 
-## 5) Prepare Query Files
-Create a folder of plain‑text queries, one file per query, named by task suffix:
+## 5) Prepare Queries
+Option A — a folder of plain‑text files, one per query, named by task suffix:
 ```
 mkdir -p queries_round_1
 echo "người lính chào cờ" > queries_round_1/query-1-kis.txt
 echo "chuỗi sự kiện: mở đầu -> phát biểu -> vỗ tay" > queries_round_1/query-2-trake.txt
+```
+Option B — a single inline query (no files):
+```
+python tools/aic_cli.py export --text "người lính chào cờ" --task kis --outdir submission --name query-1
 ```
 
 ## 6) Export Submission CSVs
@@ -96,4 +106,4 @@ The archive must contain a folder named `submission/` with your CSVs.
 - If KIS results are empty, ensure the model pickle exists (`aic-24-BE/models/clip_vit_b32_nitzche.pkl`) and that media‑info was copied.
 - If TRAKE results are empty, ensure Sonic is running (`docker compose ps` in `aic-24-BE`) and that you ingested transcripts/headings.
 - The backend uses OpenCLIP ViT‑B/32 text encoder to match the provided example features. If you switch feature backbones, update `aic-24-BE/nitzche_clip.py` and rebuild the model.
-
+- If the exporter says connection refused, start the server with `serve --run --daemon --no-reload`, check `serve-status`, and tail `aic-24-BE/uvicorn.log`. You can add `--wait-api 30` to the export command.
