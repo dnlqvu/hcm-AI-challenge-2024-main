@@ -76,6 +76,7 @@ async def preload_model():
     print("Connected to Sonic")
     asr_folder = "./data_processing/raw/transcript/"
     app.text_data = {}
+    app.video_fps = {}  # Store FPS for each video
     if os.path.isdir(asr_folder):
         for file in os.listdir(asr_folder):
             if file.endswith(".json"):
@@ -84,15 +85,26 @@ async def preload_model():
                 with open(file_path, "r", encoding="utf-8") as f:
                     data = json.load(f).get("segments", [])
                 app.text_data[vid_id] = {}
-                for segment in data:
-                    # Convert start seconds to frames (default 25 fps if missing)
+                
+                # Get FPS from the first segment or from model if available
+                video_fps = 25.0  # Default fallback
+                if data:
                     try:
-                        fps = float(segment.get("fps", 25))
-                        if fps <= 0:
-                            fps = 25.0
+                        video_fps = float(data[0].get("fps", 25))
+                        if video_fps <= 0:
+                            video_fps = 25.0
                     except Exception:
-                        fps = 25.0
-                    start = int(float(segment.get("start", 0)) * fps)
+                        video_fps = 25.0
+                
+                # Try to get FPS from model if loaded
+                if hasattr(app, 'model') and "b16" in app.model:
+                    if hasattr(app.model["b16"], 'fps') and vid_id in app.model["b16"].fps:
+                        video_fps = app.model["b16"].fps[vid_id]
+                
+                app.video_fps[vid_id] = video_fps
+                
+                for segment in data:
+                    start = int(float(segment.get("start", 0)) * video_fps)
                     app.text_data[vid_id][start] = segment.get("text", "")
         print(f"Loaded ASR transcripts from {asr_folder}")
     else:
@@ -204,16 +216,19 @@ async def asrquery(asrquery: ASRQuery):
         result = utils.unicode_string_decompress(''.join([chr(x) for x in r]))
         vid_id, frame_start, fps, prefix, frame_list  = result.split("\t")
 
-        frame_start = int(float(frame_start) * 25)
-        # frame_end = int(float(frame_end) * 25)
-        # frame_mid = ((frame_start + frame_end) >> 1)
-        # frame_mid -= frame_mid % 25
+        # Use actual FPS from the data, not hardcoded 25
+        actual_fps = float(fps) if fps else 25.0
+        frame_start = int(float(frame_start) * actual_fps)
+        # If frame_end is needed in the future:
+        # frame_end = int(float(frame_end) * actual_fps)
+        # frame_mid = (frame_start + frame_end) // 2
+        # frame_mid -= frame_mid % int(actual_fps)  # Align to 1-second boundary
 
         frame_list = utils.asc_list_decompress(frame_list)
 
         res.append(
             {
-                "text": app.text_data[vid_id][frame_start],
+                "text": app.text_data[vid_id].get(frame_start, ""),
                 "video_id": vid_id,
                 "start": frame_start,
                 "listFrameId" : frame_list,

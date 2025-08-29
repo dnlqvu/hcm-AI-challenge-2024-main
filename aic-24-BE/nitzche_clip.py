@@ -4,8 +4,9 @@ import numpy as np
 import json
 import pickle
 import csv
+import torch
 import torch.nn.functional as F
-from open_clip import create_model_from_pretrained, get_tokenizer 
+from open_clip import create_model_and_transforms, get_tokenizer  # type: ignore
 from tqdm import tqdm
 
 
@@ -23,6 +24,33 @@ class NitzcheCLIP:
         
         meta_dir = be_root / 'data' / 'media-info'
         map_dir = be_root / 'data' / 'map-keyframes'
+        
+        # First, try to load FPS from keyframe mapping files (most reliable source)
+        fps_from_keyframes = {}
+        if map_dir.is_dir():
+            for csv_file in map_dir.glob('*.csv'):
+                video_id = csv_file.stem
+                try:
+                    with csv_file.open('r', encoding='utf-8') as f:
+                        rdr = csv.reader(f)
+                        rows = list(rdr)
+                        if len(rows) > 1:  # Has header and at least one data row
+                            header = rows[0]
+                            # Find FPS column index
+                            fps_idx = None
+                            for i, col in enumerate(header):
+                                if col.strip().lower() == 'fps':
+                                    fps_idx = i
+                                    break
+                            if fps_idx is not None:
+                                # Get FPS from first data row (all rows should have same FPS)
+                                fps_val = float(rows[1][fps_idx])
+                                if fps_val > 0:
+                                    fps_from_keyframes[video_id] = fps_val
+                except Exception as e:
+                    print(f"Warning: Could not read FPS from {csv_file}: {e}")
+        
+        # Now process media-info files
         for filename in tqdm(sorted(os.listdir(meta_dir))):
             filepath = meta_dir / filename
             video_id = filename.split('.')[0]
@@ -31,65 +59,48 @@ class NitzcheCLIP:
             # watch_url is required by the UI; fall back to empty string if absent
             url = data.get('watch_url') or data.get('url') or ''
             self.youtube_link[video_id] = url
-            # fps is sometimes missing in some media-info exports; default to 25
-            try:
-                fps_val = float(data.get('fps', 25))
-                if fps_val <= 0:
+            
+            # Priority: 1) keyframe mapping FPS, 2) media-info FPS, 3) default 25
+            if video_id in fps_from_keyframes:
+                fps_val = fps_from_keyframes[video_id]
+            else:
+                # Try to get from media-info
+                try:
+                    fps_val = float(data.get('fps', 25))
+                    if fps_val <= 0:
+                        fps_val = 25.0
+                except Exception:
                     fps_val = 25.0
-            except Exception:
-                fps_val = 25.0
-            # Fallback to map-keyframes CSV if available and media-info lacks fps
-            if (not data.get('fps')) and map_dir.is_dir():
-                csv_path = map_dir / f"{video_id}.csv"
-                if csv_path.exists():
-                    try:
-                        with csv_path.open('r', encoding='utf-8') as f:
-                            rdr = csv.reader(f)
-                            rows = list(rdr)
-                            if rows:
-                                header = rows[0]
-                                has_header = any(not c.replace('.', '', 1).isdigit() for c in header)
-                                start = 1 if has_header else 0
-                                fps_idx = None
-                                if has_header:
-                                    lower = [h.strip().lower() for h in header]
-                                    for i, h in enumerate(lower):
-                                        if h == 'fps':
-                                            fps_idx = i
-                                            break
-                                # take first nonzero fps encountered
-                                for row in rows[start:]:
-                                    try:
-                                        val = float(row[fps_idx or 2])  # common index 2 when columns are n,pts_time,fps,frame_idx
-                                    except Exception:
-                                        continue
-                                    if val > 0:
-                                        fps_val = val
-                                        break
-                    except Exception:
-                        pass
+            
             self.fps[video_id] = fps_val
         
         self.image_feature = np.concatenate(self.image_feature, axis=0)
         self.model, self.processor = self._load_model()
 
     def _load_model(self):
-        device = "cpu"
-        # Align runtime text encoder with ViT-B/32 image features
-        # Pretrained weights: LAION2B s34B b79K
-        model, _ = create_model_from_pretrained('hf-hub:laion/CLIP-ViT-B-32-laion2B-s34B-b79K', device=device)
-        txt_processors = get_tokenizer('ViT-B-32')
-        return model, txt_processors
+        device = os.environ.get("CLIP_DEVICE", "cpu").lower()
+        if device not in {"cpu", "cuda"}:
+            device = "cpu"
+        # Configurable model + pretrained to match recomputed image features
+        model_name = os.environ.get("CLIP_MODEL_NAME", "ViT-B-32")
+        pretrained = os.environ.get("CLIP_PRETRAINED", "laion2b_s34b_b79k")
+        # create text+image towers; we use only text encode at runtime
+        model, _ = create_model_and_transforms(model_name, pretrained=pretrained, device=device)
+        tokenizer = get_tokenizer(model_name)
+        return model, tokenizer
 
     def featurize_text(self, text_query):
-        device = "cpu"
-        text_input = self.processor(text_query, context_length=self.model.context_length).to(device)
+        device = next(self.model.parameters()).device
+        # Tokenizer accepts list of strings
+        if isinstance(text_query, str):
+            texts = [text_query]
+        else:
+            texts = text_query
+        text_input = self.processor(texts, context_length=self.model.context_length).to(device)
         
         features_text = self.model.encode_text(text_input)
         features_text = F.normalize(features_text, dim=-1)
-        features_text = features_text.cpu().detach().numpy()
-
-        return features_text
+        return features_text.cpu().detach().numpy()
 
     def predict(self, text_query, top=500):
         features_text = self.featurize_text(text_query)    

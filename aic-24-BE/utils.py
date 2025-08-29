@@ -209,6 +209,39 @@ def unicode_string_compress(s: str) -> str:
 def unicode_string_decompress(s: str) -> str:
     return zlib.decompress(base64.b64decode(s)).decode("utf-8")
 
+def load_video_fps_from_keyframes(map_keyframes_dir: str, video_id: str, default_fps: float = 25.0) -> float:
+    """
+    Load FPS for a video from its keyframe mapping CSV file.
+    
+    Args:
+        map_keyframes_dir: Path to the map-keyframes directory
+        video_id: Video ID (e.g., 'L21_V001')
+        default_fps: Default FPS to use if not found
+    
+    Returns:
+        FPS value from the keyframe mapping file, or default_fps if not found
+    """
+    import csv
+    from pathlib import Path
+    
+    csv_path = Path(map_keyframes_dir) / f"{video_id}.csv"
+    if not csv_path.exists():
+        return default_fps
+    
+    try:
+        with csv_path.open('r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if 'fps' in row:
+                    fps = float(row['fps'])
+                    if fps > 0:
+                        return fps
+                break  # Only need first row
+    except Exception:
+        pass
+    
+    return default_fps
+
 if __name__ == "__main__":
     test_string = "first sentence $10 second sentence $0"
     print(extract_query(test_string))

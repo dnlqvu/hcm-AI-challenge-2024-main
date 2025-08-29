@@ -121,7 +121,34 @@ Zip the `submission/` folder for Codabench.
 - `tools/pack_features_from_npy.py` – pack per‑video `.npy` features into retrieval shards.
 - `tools/export_submissions.py` – generate KIS/TRAKE CSVs from query files or a single inline `--text`.
 - `tools/download_dataset_from_csv.py` – download + extract into correct subfolders; deletes ZIPs after extraction.
-- `tools/aic_cli.py serve` – start backend; add `--daemon/--no-reload`, `serve-stop`, `serve-status`.
+ - `tools/aic_cli.py serve` – start backend; add `--daemon/--no-reload`, `serve-stop`, `serve-status`.
+ - `aic-24-BE/data_processing/crop_frame.py` – configurable frame extraction:
+   - Uniform sampling by FPS: `python aic-24-BE/data_processing/crop_frame.py --input-dir <videos> --output-dir <frames> --fps 1.0`
+   - Exact frames from list (CSV): `python aic-24-BE/data_processing/crop_frame.py --input-dir <videos> --output-dir <frames> --frame-list selected_frames.csv`
+     - CSV formats supported per line: `video_id,frame_idx` or `video_id,frame1,frame2,...` (where `video_id` is the video basename without extension).
+- `tools/smart_sampling.py` – AI-driven sampler (CLIP delta / shot-aware) that selects original frame indices to keep:
+  - CLIP delta: `python tools/smart_sampling.py --videos-dir <videos> --strategy clip-delta --decode-fps 2.0 --target-fps 1.0 --out-csv selected_frames.csv`
+  - Shot-aware (TransNetV2 if available): `python tools/smart_sampling.py --videos-dir <videos> --strategy shots --shot-decode-fps 10.0 --shot-long-sec 4.0 --out-csv selected_frames.csv`
+  - Then extract exact frames via `crop_frame.py --frame-list selected_frames.csv` (above).
+- `tools/aic_cli.py sample-smart` – one-shot: run smart sampling and extract frames into the backend path:
+  - CLIP delta: `python tools/aic_cli.py sample-smart --strategy clip-delta --videos-dir <videos> --frames-dir hcm-AI-challenge-2024-main/aic-24-BE/data/video_frames --decode-fps 2.0 --target-fps 1.0`
+  - Shot-aware: `python tools/aic_cli.py sample-smart --strategy shots --videos-dir <videos> --frames-dir hcm-AI-challenge-2024-main/aic-24-BE/data/video_frames --shot-decode-fps 10.0 --shot-long-sec 4.0`
+- `tools/aic_cli.py hero-recompute-clip` – fully automated HERO CLIP extraction inside Docker, conversion to shards, frame extraction, and model build:
+  - `python tools/aic_cli.py hero-recompute-clip --videos-dir <videos> --outdir /abs/path/hero_output --clip-len 1.5`
+  - Requires Docker + NVIDIA GPU. Outputs shards in `aic-24-BE/data/clip_features`, frames in `aic-24-BE/data/video_frames`, and model at `aic-24-BE/models/clip_vit_b32_nitzche.pkl`.
+- Notebook API: `tools/smart_sampling_api.py` – importable function for Jupyter:
+   - Example:
+```
+from tools.smart_sampling_api import smart_sample_and_extract
+csv_path = smart_sample_and_extract(
+    videos_dir="example_dataset/Videos_L21_a",
+    frames_dir="hcm-AI-challenge-2024-main/aic-24-BE/data/video_frames",
+    strategy="clip-delta",  # or "shots"
+    decode_fps=2.0,
+    target_fps=1.0,
+)
+print("Selected indices at:", csv_path)
+```
 
 ## Notes
 - The backend is configured to use OpenCLIP ViT‑B/32 for text, aligned with the provided example features (B/32). If you switch feature backbones, update `aic-24-BE/nitzche_clip.py` accordingly and rebuild the model.

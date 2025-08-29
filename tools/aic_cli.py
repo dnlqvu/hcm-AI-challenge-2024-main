@@ -257,6 +257,258 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--name", default="submission.zip")
     sp.set_defaults(func=cmd_zip)
 
+    # sample-smart
+    sp = sub.add_parser("sample-smart", help="AI-driven frame sampling (CLIP delta / shots) and extraction")
+    sp.add_argument("--videos-dir", required=True, help="Directory containing input videos")
+    sp.add_argument("--frames-dir", default=str(ROOT / "aic-24-BE" / "data" / "video_frames"), help="Directory to write extracted frames")
+    sp.add_argument("--strategy", choices=["clip-delta", "shots"], default="clip-delta", help="Sampling strategy")
+    # clip-delta params
+    sp.add_argument("--decode-fps", type=float, default=2.0, help="Decode FPS for analysis (clip-delta)")
+    sp.add_argument("--target-fps", type=float, default=1.0, help="Target kept frames/sec (clip-delta)")
+    sp.add_argument("--min-gap-sec", type=float, default=0.5, help="Minimum time gap (clip-delta)")
+    sp.add_argument("--model", default="ViT-B-32", help="CLIP model for analysis (clip-delta)")
+    # shots params
+    sp.add_argument("--shot-decode-fps", type=float, default=10.0, help="Decode FPS for shot detection")
+    sp.add_argument("--shot-long-sec", type=float, default=4.0, help="Long shot threshold (sec)")
+    sp.add_argument("--shot-per-long", type=int, default=3, help="Samples per long shot")
+    # shared
+    sp.add_argument("--device", default="auto", help="cuda|cpu|auto")
+    sp.add_argument("--exts", default=".mp4,.avi,.mov,.mkv,.webm", help="Comma-separated video extensions")
+    sp.add_argument("--out-csv", default="selected_frames.csv", help="Path to write selected frame indices")
+
+    def _sample_smart(args):
+        device = args.device
+        if device == "auto":
+            device = "cuda" if shutil.which("nvidia-smi") or os.environ.get("CUDA_VISIBLE_DEVICES") else "cpu"
+        smart = ROOT / "tools" / "smart_sampling.py"
+        cmd = [
+            sys.executable, str(smart),
+            "--videos-dir", args.videos_dir,
+            "--strategy", args.strategy,
+            "--device", device,
+            "--out-csv", args.out_csv,
+            "--exts", args.exts,
+        ]
+        if args.strategy == "clip-delta":
+            cmd += [
+                "--decode-fps", str(args.decode_fps),
+                "--target-fps", str(args.target_fps),
+                "--min-gap-sec", str(args.min_gap_sec),
+                "--model", args.model,
+            ]
+        else:
+            cmd += [
+                "--shot-decode-fps", str(args.shot_decode_fps),
+                "--shot-long-sec", str(args.shot_long_sec),
+                "--shot-per-long", str(args.shot_per_long),
+            ]
+        run(cmd)
+        crop = ROOT / "aic-24-BE" / "data_processing" / "crop_frame.py"
+        run([
+            sys.executable, str(crop),
+            "--input-dir", args.videos_dir,
+            "--output-dir", args.frames_dir,
+            "--frame-list", args.out_csv,
+        ])
+    sp.set_defaults(func=_sample_smart)
+
+    # build-model-from-shards
+    def _build_model(args):
+        be_dir = Path(args.be_dir)
+        sys.path.insert(0, str(be_dir))
+        from nitzche_clip import NitzcheCLIP  # type: ignore
+        models_dir = be_dir / "models"
+        models_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Building model from shards: {args.shards_dir}")
+        m = NitzcheCLIP(args.shards_dir)
+        out = models_dir / args.model_name
+        m.save(str(out))
+        print(f"Saved: {out}")
+        # Patch .env
+        envp = be_dir / ".env"
+        lines = []
+        if envp.exists():
+            lines = envp.read_text(encoding="utf-8").splitlines()
+        saw_path = saw_16 = False
+        out_lines = []
+        for line in lines:
+            if line.strip().startswith("MODEL_PATH="):
+                out_lines.append('MODEL_PATH="./models/"')
+                saw_path = True
+            elif line.strip().startswith("MODEL_16="):
+                out_lines.append(f'MODEL_16="{args.model_name}"')
+                saw_16 = True
+            else:
+                out_lines.append(line)
+        if not saw_path:
+            out_lines.append('MODEL_PATH="./models/"')
+        if not saw_16:
+            out_lines.append(f'MODEL_16="{args.model_name}"')
+        envp.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+        print(f"Patched {envp}")
+
+    sp = sub.add_parser("build-model-from-shards", help="Build model pickle from shards in aic-24-BE/data/clip_features")
+    sp.add_argument("--be-dir", default=str(ROOT / "aic-24-BE"))
+    sp.add_argument("--shards-dir", default=str(ROOT / "aic-24-BE" / "data" / "clip_features"))
+    sp.add_argument("--model-name", default="clip_vit_b32_nitzche.pkl")
+    sp.set_defaults(func=_build_model)
+
+    # hero-clone
+    def _hero_clone(args):
+        vendor = ROOT / "vendor" / "HERO_Video_Feature_Extractor"
+        if vendor.exists():
+            print(f"Already present: {vendor}")
+            return
+        vendor.parent.mkdir(parents=True, exist_ok=True)
+        run(["git", "clone", "https://github.com/linjieli222/HERO_Video_Feature_Extractor.git", str(vendor)])
+        print(f"Cloned HERO into {vendor}")
+
+    sp = sub.add_parser("hero-clone", help="Clone HERO Video Feature Extractor into vendor/")
+    sp.set_defaults(func=_hero_clone)
+
+    # hero-extract-clip
+    def _hero_extract_clip(args):
+        vendor = ROOT / "vendor" / "HERO_Video_Feature_Extractor"
+        if not vendor.exists():
+            _hero_clone(args)
+        outdir = Path(args.outdir).resolve()
+        outdir.mkdir(parents=True, exist_ok=True)
+        vids = Path(args.videos_dir).resolve()
+        if not vids.exists():
+            raise SystemExit(f"Videos dir not found: {vids}")
+        image = "linjieli222/hero-video-feature-extractor:clip"
+        inner = (
+            "cd /src/clip && "
+            "python gather_video_paths.py && "
+            f"python extract.py --csv /output/csv/clip-vit_info.csv --num_decoding_thread {args.threads} "
+            f"--model_version {args.model_version} --clip_len {args.clip_len}"
+        )
+        cmd = [
+            "docker", "run", "--gpus", "all", "--ipc=host", "--network=host", "--rm", "-t",
+            "--mount", f"src={vendor.as_posix()},dst=/src,type=bind",
+            "--mount", f"src={vids.as_posix()},dst=/video,type=bind,readonly",
+            "--mount", f"src={outdir.as_posix()},dst=/output,type=bind",
+            "-w", "/src",
+            image, "bash", "-lc", inner,
+        ]
+        run(cmd)
+        print(f"HERO CLIP features written under {outdir}/clip-vit_features")
+
+    sp = sub.add_parser("hero-extract-clip", help="Run HERO CLIP extractor via Docker")
+    sp.add_argument("--videos-dir", required=True, help="Folder with input videos")
+    sp.add_argument("--outdir", required=True, help="Output folder to mount as /output")
+    sp.add_argument("--clip-len", default="1.5", help="Seconds per feature (e.g., 1.5 or 2)")
+    sp.add_argument("--model-version", default="ViT-B/32", help="HERO CLIP model version")
+    sp.add_argument("--threads", type=int, default=4, help="Decoding threads")
+    sp.set_defaults(func=_hero_extract_clip)
+
+    # hero-recompute-clip: extract -> convert -> extract frames -> build model
+    def _hero_recompute_clip(args):
+        _hero_extract_clip(args)
+        hero_out = Path(args.outdir).resolve() / "clip-vit_features"
+        conv = ROOT / "tools" / "convert_hero_clip_to_shards.py"
+        frame_list = Path(args.frame_list or "selected_frames_from_hero.csv").resolve()
+        run([
+            sys.executable, str(conv),
+            "--hero-clip-dir", hero_out.as_posix(),
+            "--media-info", str(ROOT / "aic-24-BE" / "data" / "media-info"),
+            "--clip-len", str(args.clip_len),
+            "--frames-prefix", "./data/video_frames",
+            "--outdir", str(ROOT / "aic-24-BE" / "data" / "clip_features"),
+            "--emit-frame-list", str(frame_list),
+        ])
+        crop = ROOT / "aic-24-BE" / "data_processing" / "crop_frame.py"
+        run([
+            sys.executable, str(crop),
+            "--input-dir", args.videos_dir,
+            "--output-dir", str(ROOT / "aic-24-BE" / "data" / "video_frames"),
+            "--frame-list", str(frame_list),
+        ])
+        be_dir = ROOT / "aic-24-BE"
+        sys.path.insert(0, str(be_dir))
+        from nitzche_clip import NitzcheCLIP  # type: ignore
+        models_dir = be_dir / "models"
+        models_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Building model from shards: {ROOT / 'aic-24-BE' / 'data' / 'clip_features'}")
+        m = NitzcheCLIP(str(ROOT / "aic-24-BE" / "data" / "clip_features"))
+        out = models_dir / args.model_name
+        m.save(str(out))
+        print(f"Saved: {out}")
+        # Patch .env
+        envp = be_dir / ".env"
+        lines = []
+        if envp.exists():
+            lines = envp.read_text(encoding="utf-8").splitlines()
+        saw_path = saw_16 = False
+        out_lines = []
+        for line in lines:
+            if line.strip().startswith("MODEL_PATH="):
+                out_lines.append('MODEL_PATH="./models/"')
+                saw_path = True
+            elif line.strip().startswith("MODEL_16="):
+                out_lines.append(f'MODEL_16="{args.model_name}"')
+                saw_16 = True
+            else:
+                out_lines.append(line)
+        if not saw_path:
+            out_lines.append('MODEL_PATH="./models/"')
+        if not saw_16:
+            out_lines.append(f'MODEL_16="{args.model_name}"')
+        envp.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+        print(f"Patched {envp}")
+        print("All done. Start the backend and test /query.")
+
+    sp = sub.add_parser("hero-recompute-clip", help="End-to-end: HERO extract → convert → extract frames → build model")
+    sp.add_argument("--videos-dir", required=True, help="Folder with input videos")
+    sp.add_argument("--outdir", required=True, help="HERO output folder to mount as /output")
+    sp.add_argument("--clip-len", default="1.5", help="Seconds per feature (e.g., 1.5 or 2)")
+    sp.add_argument("--model-version", default="ViT-B/32", help="HERO CLIP model version")
+    sp.add_argument("--threads", type=int, default=4, help="Decoding threads")
+    sp.add_argument("--frame-list", help="Path to write selected frames CSV (default: selected_frames_from_hero.csv)")
+    sp.add_argument("--model-name", default="clip_vit_b32_nitzche.pkl")
+    sp.set_defaults(func=_hero_recompute_clip)
+
+    # clip-extract-colab: no Docker, simple per-clip_len features using open_clip
+    def _clip_extract_colab(args):
+        script = ROOT / "tools" / "extract_clip_features_colab.py"
+        device = args.device
+        if device == "auto":
+            try:
+                import torch  # type: ignore
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+            except Exception:
+                device = "cpu"
+        cmd = [
+            sys.executable, str(script),
+            "--videos-dir", args.videos_dir,
+            "--outdir", args.outdir,
+            "--clip-len", str(args.clip_len),
+            "--model", args.model,
+            "--pretrained", args.pretrained,
+            "--device", device,
+            "--exts", args.exts,
+        ]
+        if args.backend and args.backend != "auto":
+            cmd += ["--backend", args.backend]
+        elif args.use_lighthouse:
+            cmd.append("--use-lighthouse")
+        if getattr(args, "frames_per_clip", None) is not None:
+            cmd += ["--frames-per-clip", str(args.frames_per_clip)]
+        run(cmd)
+
+    sp = sub.add_parser("clip-extract-colab", help="Colab-friendly CLIP feature extractor (no Docker)")
+    sp.add_argument("--videos-dir", required=True)
+    sp.add_argument("--outdir", default=str(ROOT / "hero_colab_out" / "clip-vit_features"))
+    sp.add_argument("--clip-len", default="1.5")
+    sp.add_argument("--model", default="ViT-B-32")
+    sp.add_argument("--pretrained", default="laion2b_s34b_b79k", help="open_clip pretrained tag or hf-hub:<repo>")
+    sp.add_argument("--device", default="auto", help="cuda|cpu|auto")
+    sp.add_argument("--exts", default=".mp4,.avi,.mov,.mkv,.webm")
+    sp.add_argument("--use-lighthouse", action="store_true", help="Use vendor/lighthouse CLIPLoader for decoding (deprecated; use --backend)")
+    sp.add_argument("--backend", choices=["auto", "clip", "lighthouse-clip", "slowfast"], default="auto")
+    sp.add_argument("--frames-per-clip", type=int, default=8, help="When backend=slowfast: frames per clip to encode (averaged)")
+    sp.set_defaults(func=_clip_extract_colab)
+
     return p
 
 
