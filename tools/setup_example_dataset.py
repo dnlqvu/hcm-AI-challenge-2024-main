@@ -98,6 +98,7 @@ def main() -> int:
     media_dst = bedir / 'data' / 'media-info'
     frames_dst = bedir / 'data' / 'video_frames'
     feats_dst = bedir / 'data' / 'clip_features'
+    maps_dst = bedir / 'data' / 'map-keyframes'
 
     # Guard: ensure all required inputs exist before mutating the backend
     missing = [
@@ -113,6 +114,7 @@ def main() -> int:
     if not args.dry_run:
         copy_tree(media_src, media_dst)
         copy_tree(frames_src, frames_dst)
+        copy_tree(maps_src, maps_dst)
 
         # Rename frames using maps
         cmd = [

@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 import json
 import pickle
+import csv
 import torch.nn.functional as F
 from open_clip import create_model_from_pretrained, get_tokenizer 
 from tqdm import tqdm
@@ -21,13 +22,53 @@ class NitzcheCLIP:
                 self.image_feature.append(image_feature)
         
         meta_dir = be_root / 'data' / 'media-info'
+        map_dir = be_root / 'data' / 'map-keyframes'
         for filename in tqdm(sorted(os.listdir(meta_dir))):
             filepath = meta_dir / filename
             video_id = filename.split('.')[0]
             with open(filepath, 'r') as file:
                 data = json.load(file)
-            self.youtube_link[video_id] = data['watch_url']
-            self.fps[video_id] = data['fps']
+            # watch_url is required by the UI; fall back to empty string if absent
+            url = data.get('watch_url') or data.get('url') or ''
+            self.youtube_link[video_id] = url
+            # fps is sometimes missing in some media-info exports; default to 25
+            try:
+                fps_val = float(data.get('fps', 25))
+                if fps_val <= 0:
+                    fps_val = 25.0
+            except Exception:
+                fps_val = 25.0
+            # Fallback to map-keyframes CSV if available and media-info lacks fps
+            if (not data.get('fps')) and map_dir.is_dir():
+                csv_path = map_dir / f"{video_id}.csv"
+                if csv_path.exists():
+                    try:
+                        with csv_path.open('r', encoding='utf-8') as f:
+                            rdr = csv.reader(f)
+                            rows = list(rdr)
+                            if rows:
+                                header = rows[0]
+                                has_header = any(not c.replace('.', '', 1).isdigit() for c in header)
+                                start = 1 if has_header else 0
+                                fps_idx = None
+                                if has_header:
+                                    lower = [h.strip().lower() for h in header]
+                                    for i, h in enumerate(lower):
+                                        if h == 'fps':
+                                            fps_idx = i
+                                            break
+                                # take first nonzero fps encountered
+                                for row in rows[start:]:
+                                    try:
+                                        val = float(row[fps_idx or 2])  # common index 2 when columns are n,pts_time,fps,frame_idx
+                                    except Exception:
+                                        continue
+                                    if val > 0:
+                                        fps_val = val
+                                        break
+                    except Exception:
+                        pass
+            self.fps[video_id] = fps_val
         
         self.image_feature = np.concatenate(self.image_feature, axis=0)
         self.model, self.processor = self._load_model()
@@ -71,12 +112,19 @@ class NitzcheCLIP:
         return [
             {
                 'img_path': os.path.join('./data/video_frames', vid, timeframe[0]),
-                'youtube_link': f"{self.youtube_link[vid]}&t={int(int(timeframe[0].split('.')[0])/self.fps[vid])}s",
+                'youtube_link': self._with_time_param(self.youtube_link[vid], int(int(timeframe[0].split('.')[0]) / self.fps[vid])),
                 'fps': self.fps[vid],
                 'highlight': timeframe[1]
             } 
             for vid, timeframe_list in results_dict.items() for timeframe in timeframe_list
         ]
+
+    @staticmethod
+    def _with_time_param(url: str, seconds: int) -> str:
+        if not url:
+            return ''
+        sep = '&' if '?' in url else '?'
+        return f"{url}{sep}t={seconds}s"
         
     def save(self, path):
         pickle.dump(self, open(path, "wb"))
