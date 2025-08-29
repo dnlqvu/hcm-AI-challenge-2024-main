@@ -150,19 +150,32 @@ def verify_checksum(path: Path, algo: str, expected: str) -> bool:
 
 
 def infer_extract_dir(filename: str) -> Optional[str]:
+    """Infer a reasonable extract subfolder from the archive name.
+
+    Order matters: check specific patterns (map-keyframes) before generic ones (keyframes)
+    to avoid routing the maps archive into the keyframes folder.
+    """
     name = filename.lower()
-    if 'keyframe' in name:
-        return 'keyframes'
-    if 'map-keyframe' in name or 'map_keyframe' in name:
+    # Map CSVs
+    if (
+        'map-keyframes' in name or 'map_keyframes' in name or 'mapkeyframes' in name
+        or 'map-keyframe' in name or 'map_keyframe' in name or 'mapkeyframe' in name
+    ):
         return 'map-keyframes'
+    # Media-info JSONs
     if 'media-info' in name or 'mediainfo' in name:
         return 'media-info'
+    # Precomputed CLIP features
     if 'clip' in name and 'feature' in name:
         return 'clip-features-32'
+    # Object JSONs
     if 'object' in name:
         return 'objects'
+    # Keyframes (generic) — check after map-keyframes
+    if 'keyframe' in name:
+        return 'keyframes'
+    # Fallback: base name without .zip
     if name.endswith('.zip'):
-        # default: use base name (sans .zip)
         return os.path.splitext(os.path.basename(filename))[0]
     return None
 
@@ -177,6 +190,16 @@ def extract_zip(zip_path: Path, out_root: Path, target_subdir: Optional[str] = N
     print(f"Extracting {zip_path.name} -> {dst}")
     with zipfile.ZipFile(zip_path, 'r') as z:
         z.extractall(dst)
+    # Flatten if archive contains a redundant top-level folder matching subdir
+    nested = dst / subdir
+    try:
+        if nested.is_dir():
+            for p in nested.iterdir():
+                p.rename(dst / p.name)
+            nested.rmdir()
+    except Exception:
+        # Non-fatal; continue
+        pass
 
 
 def main() -> int:

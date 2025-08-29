@@ -99,6 +99,17 @@ def main() -> int:
     frames_dst = bedir / 'data' / 'video_frames'
     feats_dst = bedir / 'data' / 'clip_features'
 
+    # Guard: ensure all required inputs exist before mutating the backend
+    missing = [
+        p.relative_to(exdir).as_posix() for p in (media_src, frames_src, maps_src, feats_src) if not p.exists()
+    ]
+    if missing:
+        print('[ERROR] Missing required folders in example dataset:')
+        for m in missing:
+            print('  -', m)
+        print('Hint: run "python tools/aic_cli.py download-dataset --csv AIC_2025_dataset_download_link.csv --outdir example_dataset --extract"')
+        return 2
+
     if not args.dry_run:
         copy_tree(media_src, media_dst)
         copy_tree(frames_src, frames_dst)

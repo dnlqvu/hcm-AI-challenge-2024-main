@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""
+r"""
 Rename keyframe images to original frame indices using map-keyframes CSVs.
 
 Expected layouts:
@@ -230,4 +230,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
