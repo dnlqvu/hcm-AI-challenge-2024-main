@@ -256,12 +256,13 @@ def detect_shots_naive(frames_bgr: List[np.ndarray], thresh: float = 0.35) -> Li
     for fr in frames_bgr:
         hsv = cv2.cvtColor(fr, cv2.COLOR_BGR2HSV)
         h = cv2.calcHist([hsv], [0, 1], None, [16, 16], [0, 180, 0, 256])
+        h = h.astype('float32')  # Convert to float32 before normalize
         h = cv2.normalize(h, h).flatten()
         hists.append(h)
     # Shot boundaries when histogram distance > thresh
     boundaries = [0]
     for i in range(1, len(hists)):
-        d = cv2.compareHist(hists[i - 1].astype('float32'), hists[i].astype('float32'), cv2.HISTCMP_BHATTACHARYYA)
+        d = cv2.compareHist(hists[i - 1], hists[i], cv2.HISTCMP_BHATTACHARYYA)
         if d > thresh:
             boundaries.append(i)
     boundaries.append(len(hists))

@@ -14,7 +14,16 @@ class NitzcheCLIP:
     def __init__(self, feature_path):
         self.file_path_list, self.image_feature, self.youtube_link, self.fps = [], [], {}, {}
         be_root = Path(__file__).resolve().parent
-        for filename in tqdm(sorted(os.listdir(feature_path))):
+        
+        # Validate feature directory exists
+        if not os.path.exists(feature_path):
+            raise ValueError(f"Feature directory does not exist: {feature_path}")
+        
+        feature_files = sorted(os.listdir(feature_path))
+        if not feature_files:
+            raise ValueError(f"No feature files found in: {feature_path}")
+        
+        for filename in tqdm(feature_files):
             filepath = os.path.join(feature_path, filename)
             with open(filepath, "rb") as fp:
                 file_path, image_feature = pickle.load(fp)
@@ -24,6 +33,10 @@ class NitzcheCLIP:
         
         meta_dir = be_root / 'data' / 'media-info'
         map_dir = be_root / 'data' / 'map-keyframes'
+        
+        # Validate media-info directory exists
+        if not meta_dir.is_dir():
+            raise ValueError(f"Media info directory does not exist: {meta_dir}")
         
         # First, try to load FPS from keyframe mapping files (most reliable source)
         fps_from_keyframes = {}
