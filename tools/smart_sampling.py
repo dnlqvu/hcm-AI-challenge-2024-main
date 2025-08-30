@@ -57,7 +57,7 @@ import torch
 
 
 # Try open_clip first, fall back to clip
-def load_clip(model_name: str = "ViT-B-32", device: str = "cpu", pretrained: str = "laion2b_s34b_b79k"):
+def load_clip(model_name: str = "ViT-L-16-SigLIP-256", device: str = "cpu", pretrained: str = "webli"):
     try:
         import open_clip  # type: ignore
 
@@ -108,6 +108,106 @@ def list_videos(input_dir: str, exts: Tuple[str, ...], recursive: bool = False) 
 def basename_no_ext(path: str) -> str:
     base = os.path.basename(path)
     return os.path.splitext(base)[0]
+
+
+def detect_content_type(frame: np.ndarray) -> Tuple[str, float, dict]:
+    """
+    Intelligent content analysis to determine optimal sampling strategy.
+    
+    Returns:
+        content_type: 'text', 'face', 'action', 'landscape', 'static'
+        confidence: 0-1 confidence score
+        metadata: dict with additional info (motion_score, text_regions, etc.)
+    """
+    h, w = frame.shape[:2]
+    metadata = {}
+    
+    # 1. Motion detection via optical flow magnitude
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    # 2. Text detection using EAST or simple edge density
+    edges = cv2.Canny(gray, 50, 150)
+    edge_density = np.sum(edges > 0) / (h * w)
+    
+    # High edge density in organized patterns suggests text
+    if edge_density > 0.15:
+        # Look for text-like rectangular regions
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        text_regions = 0
+        for cnt in contours:
+            x, y, w_cnt, h_cnt = cv2.boundingRect(cnt)
+            aspect = w_cnt / max(h_cnt, 1)
+            area = w_cnt * h_cnt
+            if 0.3 < aspect < 10 and area > 100:  # Text-like aspect ratios
+                text_regions += 1
+        
+        if text_regions > 5:
+            metadata['text_regions'] = text_regions
+            metadata['edge_density'] = edge_density
+            return 'text', min(0.9, text_regions / 20), metadata
+    
+    # 3. Face detection using Haar cascades (lightweight)
+    try:
+        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+        faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+        if len(faces) > 0:
+            metadata['face_count'] = len(faces)
+            metadata['face_areas'] = [w*h for (x,y,w,h) in faces]
+            return 'face', min(0.95, len(faces) * 0.3), metadata
+    except Exception:
+        pass
+    
+    # 4. Activity/motion analysis using frame differences
+    # This requires previous frame - we'll approximate with texture analysis
+    laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+    texture_var = laplacian.var()
+    
+    # High texture variance suggests complex scene or motion
+    if texture_var > 800:
+        metadata['texture_variance'] = texture_var
+        return 'action', min(0.8, texture_var / 2000), metadata
+    
+    # 5. Color analysis for landscapes vs indoor scenes
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    
+    # Green/blue dominance suggests outdoor/landscape
+    green_blue_ratio = (np.sum((hsv[:,:,0] > 35) & (hsv[:,:,0] < 85)) + 
+                       np.sum((hsv[:,:,0] > 100) & (hsv[:,:,0] < 130))) / (h * w)
+    
+    if green_blue_ratio > 0.3 and texture_var > 200:
+        metadata['nature_ratio'] = green_blue_ratio
+        return 'landscape', min(0.7, green_blue_ratio), metadata
+    
+    # Default to static content
+    metadata['edge_density'] = edge_density
+    metadata['texture_variance'] = texture_var
+    return 'static', 0.6, metadata
+
+
+def get_adaptive_sampling_params(content_type: str, confidence: float) -> Tuple[float, int, int]:
+    """
+    Get optimal sampling parameters based on content type.
+    
+    Returns:
+        fps_multiplier: multiply base fps by this
+        target_resolution: preferred resolution for this content
+        batch_preference: preferred batch size
+    """
+    params = {
+        'text': (2.5, 384, 8),      # High FPS, high res for OCR, small batches
+        'face': (2.0, 320, 12),     # High FPS, medium res for expressions
+        'action': (3.0, 256, 16),   # Highest FPS for motion, balanced res
+        'landscape': (0.8, 224, 20), # Low FPS, lower res acceptable
+        'static': (0.5, 256, 24)    # Lowest FPS, standard res
+    }
+    
+    base_fps, base_res, base_batch = params.get(content_type, params['static'])
+    
+    # Adjust by confidence
+    fps_mult = base_fps * (0.5 + 0.5 * confidence)
+    target_res = int(base_res * (0.9 + 0.1 * confidence))
+    
+    return fps_mult, target_res, base_batch
 
 
 @dataclass
@@ -362,6 +462,7 @@ def run_clip_delta(
     min_gap_sec: float,
     exts: Tuple[str, ...],
     recursive: bool = False,
+    adaptive: bool = False,
 ) -> None:
     vids = list_videos(videos_dir, exts, recursive=recursive)
     if not vids:
@@ -377,7 +478,39 @@ def run_clip_delta(
     for path in vids:
         vid = basename_no_ext(path)
         info = probe_video(path)
-        decode_indices = sample_decode_indices(info, decode_fps)
+        
+        # Adaptive sampling based on content analysis
+        current_decode_fps = decode_fps
+        current_target_fps = target_fps
+        content_stats = {'text': 0, 'face': 0, 'action': 0, 'landscape': 0, 'static': 0}
+        
+        if adaptive:
+            # Quick content analysis on a few sample frames
+            cap = cv2.VideoCapture(path)
+            sample_indices = [int(i * info.total_frames / 5) for i in range(5)]  # 5 sample frames
+            sample_frames = []
+            
+            for idx in sample_indices:
+                fr = read_frame_at(cap, idx)
+                if fr is not None:
+                    content_type, confidence, metadata = detect_content_type(fr)
+                    content_stats[content_type] += confidence
+                    sample_frames.append((content_type, confidence))
+            cap.release()
+            
+            # Determine dominant content type
+            dominant_type = max(content_stats.keys(), key=lambda k: content_stats[k])
+            dominant_confidence = content_stats[dominant_type] / len(sample_frames) if sample_frames else 0.5
+            
+            # Get adaptive parameters
+            fps_mult, _, _ = get_adaptive_sampling_params(dominant_type, dominant_confidence)
+            current_decode_fps = decode_fps * fps_mult
+            current_target_fps = target_fps * fps_mult
+            
+            print(f"[adaptive] {vid}: dominant={dominant_type}({dominant_confidence:.2f}) "
+                  f"fps_mult={fps_mult:.2f} decode={current_decode_fps:.2f} target={current_target_fps:.2f}")
+        
+        decode_indices = sample_decode_indices(info, current_decode_fps)
         if not decode_indices:
             print(f"[WARN] {vid}: no decodable frames; skipping")
             continue
@@ -397,12 +530,14 @@ def run_clip_delta(
 
         embs = encode_images_clip(model, preprocess, frames_bgr, device, use_open_clip)
         kept_indices = select_by_delta(
-            embs, decode_indices, info, target_fps=target_fps, min_gap_sec=min_gap_sec
+            embs, decode_indices, info, target_fps=current_target_fps, min_gap_sec=min_gap_sec
         )
         write_selected(out_csv, vid, kept_indices)
+        
+        mode_str = f"clip-delta-{'adaptive' if adaptive else 'standard'}"
         print(
-            f"[clip-delta] {vid}: src_fps={info.fps:.2f} dur={info.duration_sec:.1f}s "
-            f"decode_fps={decode_fps} decoded={len(decode_indices)} kept={len(kept_indices)}"
+            f"[{mode_str}] {vid}: src_fps={info.fps:.2f} dur={info.duration_sec:.1f}s "
+            f"decode_fps={current_decode_fps:.2f} decoded={len(decode_indices)} kept={len(kept_indices)}"
         )
 
 
@@ -413,12 +548,13 @@ def main() -> int:
     p.add_argument("--decode-fps", type=float, default=2.0, help="Decode frames at this FPS for analysis")
     p.add_argument("--target-fps", type=float, default=1.0, help="Target average kept frames per second")
     p.add_argument("--min-gap-sec", type=float, default=0.5, help="Minimum temporal gap between kept frames")
-    p.add_argument("--model", type=str, default="ViT-B-32", help="CLIP model name for clip-delta")
-    p.add_argument("--pretrained", type=str, default="laion2b_s34b_b79k", help="open_clip pretrained tag (e.g., webli or hf-hub:<repo>)")
+    p.add_argument("--model", type=str, default="ViT-L-16-SigLIP-256", help="CLIP model name for clip-delta")
+    p.add_argument("--pretrained", type=str, default="webli", help="open_clip pretrained tag (e.g., webli or hf-hub:<repo>)")
     p.add_argument("--device", type=str, default=("cuda" if torch.cuda.is_available() else "cpu"))
     p.add_argument("--out-csv", type=str, default="selected_frames.csv")
     p.add_argument("--exts", type=str, default=".mp4,.avi,.mov,.mkv,.webm", help="Comma-separated video extensions")
     p.add_argument("--recursive", action="store_true", default=True, help="Recursively search for videos under --videos-dir (default: on)")
+    p.add_argument("--adaptive", action="store_true", help="Enable intelligent content-aware adaptive sampling")
     # Shot-aware params
     p.add_argument("--shot-decode-fps", type=float, default=10.0, help="Decode FPS for shot boundary detection")
     p.add_argument("--shot-long-sec", type=float, default=4.0, help="Consider shots >= this length as long (more samples)")
@@ -438,6 +574,7 @@ def main() -> int:
             min_gap_sec=args.min_gap_sec,
             exts=exts,
             recursive=args.recursive,
+            adaptive=args.adaptive,
         )
         print(f"Wrote selected frames -> {args.out_csv}")
         print(
