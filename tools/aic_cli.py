@@ -275,6 +275,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--device", default="auto", help="cuda|cpu|auto")
     sp.add_argument("--exts", default=".mp4,.avi,.mov,.mkv,.webm", help="Comma-separated video extensions")
     sp.add_argument("--out-csv", default="selected_frames.csv", help="Path to write selected frame indices")
+    sp.add_argument("--recursive", action="store_true", default=True, help="Recursively search for videos under --videos-dir")
 
     def _sample_smart(args):
         device = args.device
@@ -494,6 +495,8 @@ def build_parser() -> argparse.ArgumentParser:
             cmd.append("--use-lighthouse")
         if getattr(args, "frames_per_clip", None) is not None:
             cmd += ["--frames-per-clip", str(args.frames_per_clip)]
+        if args.recursive:
+            cmd.append("--recursive")
         run(cmd)
 
     sp = sub.add_parser("clip-extract-colab", help="Colab-friendly CLIP feature extractor (no Docker)")

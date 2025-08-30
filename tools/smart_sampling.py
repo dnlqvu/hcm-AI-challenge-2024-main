@@ -89,11 +89,19 @@ def ensure_dir(path: str) -> None:
         os.makedirs(path)
 
 
-def list_videos(input_dir: str, exts: Tuple[str, ...]) -> List[str]:
+def list_videos(input_dir: str, exts: Tuple[str, ...], recursive: bool = False) -> List[str]:
     out: List[str] = []
-    for name in sorted(os.listdir(input_dir)):
-        if any(name.lower().endswith(e) for e in exts):
-            out.append(os.path.join(input_dir, name))
+    if not recursive:
+        for name in sorted(os.listdir(input_dir)):
+            p = os.path.join(input_dir, name)
+            if os.path.isfile(p) and any(name.lower().endswith(e) for e in exts):
+                out.append(p)
+        return out
+    # recursive walk
+    for root, _, files in os.walk(input_dir):
+        for name in sorted(files):
+            if any(name.lower().endswith(e) for e in exts):
+                out.append(os.path.join(root, name))
     return out
 
 
@@ -281,8 +289,9 @@ def run_shots(
     shot_long_sec: float,
     shot_per_long: int,
     exts: Tuple[str, ...],
+    recursive: bool = False,
 ) -> None:
-    vids = list_videos(videos_dir, exts)
+    vids = list_videos(videos_dir, exts, recursive=recursive)
     if not vids:
         print(f"[ERROR] No videos found in {videos_dir} with extensions {exts}")
         return
@@ -351,8 +360,9 @@ def run_clip_delta(
     target_fps: float,
     min_gap_sec: float,
     exts: Tuple[str, ...],
+    recursive: bool = False,
 ) -> None:
-    vids = list_videos(videos_dir, exts)
+    vids = list_videos(videos_dir, exts, recursive=recursive)
     if not vids:
         print(f"[ERROR] No videos found in {videos_dir} with extensions {exts}")
         return
@@ -406,6 +416,7 @@ def main() -> int:
     p.add_argument("--device", type=str, default=("cuda" if torch.cuda.is_available() else "cpu"))
     p.add_argument("--out-csv", type=str, default="selected_frames.csv")
     p.add_argument("--exts", type=str, default=".mp4,.avi,.mov,.mkv,.webm", help="Comma-separated video extensions")
+    p.add_argument("--recursive", action="store_true", help="Recursively search for videos under --videos-dir")
     # Shot-aware params
     p.add_argument("--shot-decode-fps", type=float, default=10.0, help="Decode FPS for shot boundary detection")
     p.add_argument("--shot-long-sec", type=float, default=4.0, help="Consider shots >= this length as long (more samples)")
@@ -423,6 +434,7 @@ def main() -> int:
             target_fps=args.target_fps,
             min_gap_sec=args.min_gap_sec,
             exts=exts,
+            recursive=args.recursive,
         )
         print(f"Wrote selected frames -> {args.out_csv}")
         print(
@@ -437,6 +449,7 @@ def main() -> int:
             shot_long_sec=args.shot_long_sec,
             shot_per_long=args.shot_per_long,
             exts=exts,
+            recursive=args.recursive,
         )
         print(f"Wrote selected frames -> {args.out_csv}")
         print(

@@ -13,11 +13,18 @@ def ensure_dir(path: str) -> None:
         os.makedirs(path)
 
 
-def list_videos(input_dir: str, exts: Tuple[str, ...]) -> List[str]:
+def list_videos(input_dir: str, exts: Tuple[str, ...], recursive: bool = False) -> List[str]:
     out: List[str] = []
-    for name in sorted(os.listdir(input_dir)):
-        if any(name.lower().endswith(e) for e in exts):
-            out.append(os.path.join(input_dir, name))
+    if not recursive:
+        for name in sorted(os.listdir(input_dir)):
+            p = os.path.join(input_dir, name)
+            if os.path.isfile(p) and any(name.lower().endswith(e) for e in exts):
+                out.append(p)
+        return out
+    for root, _, files in os.walk(input_dir):
+        for name in sorted(files):
+            if any(name.lower().endswith(e) for e in exts):
+                out.append(os.path.join(root, name))
     return out
 
 
@@ -137,12 +144,13 @@ def main() -> None:
     ap.add_argument("--frame-list", type=str, help="CSV file of frames to keep: video_id,frame or video_id,frame1,frame2,...")
     ap.add_argument("--workers", type=int, default=max(1, multiprocessing.cpu_count()), help="Max parallel worker threads for decoding")
     ap.add_argument("--exts", type=str, default=".mp4,.avi,.mov,.mkv,.webm", help="Comma-separated list of video extensions to include")
+    ap.add_argument("--recursive", action="store_true", help="Recursively search for videos under --input-dir")
     args = ap.parse_args()
 
     ensure_dir(args.output_dir)
 
     exts = tuple(e.strip().lower() for e in args.exts.split(",") if e.strip())
-    videos = list_videos(args.input_dir, exts)
+    videos = list_videos(args.input_dir, exts, recursive=bool(args.recursive))
     if not videos:
         print(f"[ERROR] No videos found in {args.input_dir} with extensions {exts}")
         return
