@@ -11,6 +11,8 @@ import json
 import pickle
 import dill as pickle 
 
+import os
+os.environ.setdefault("TORCHVISION_DISABLE_NMS_EXPORT", "1")
 import torch
 import utils
 import pdb
