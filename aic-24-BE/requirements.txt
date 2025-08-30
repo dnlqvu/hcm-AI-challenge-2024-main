@@ -35,7 +35,7 @@ sympy==1.13.2
 timm==1.0.9
 tokenizers==0.19.1
 torch
-torchaudio  
+torchaudio
 torchvision
 tqdm==4.66.5
 transformers==4.44.2
