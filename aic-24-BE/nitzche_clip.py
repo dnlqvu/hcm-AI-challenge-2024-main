@@ -31,16 +31,39 @@ class NitzcheCLIP:
                 self.file_path_list.extend(file_path)
                 self.image_feature.append(image_feature)
         
-        meta_dir = be_root / 'data' / 'media-info'
-        map_dir = be_root / 'data' / 'map-keyframes'
+        # Try multiple possible locations for media-info and map-keyframes
+        possible_base_dirs = [
+            be_root / 'data',  # Original location: aic-24-BE/data/
+            be_root.parent / 'example_dataset',  # Dataset location: example_dataset/
+            Path.cwd() / 'example_dataset',  # Current working directory
+            Path.cwd().parent / 'example_dataset',  # Parent directory
+        ]
+        
+        meta_dir = None
+        map_dir = None
+        
+        # Find media-info directory
+        for base_dir in possible_base_dirs:
+            potential_meta = base_dir / 'media-info'
+            if potential_meta.is_dir():
+                meta_dir = potential_meta
+                break
+        
+        # Find map-keyframes directory
+        for base_dir in possible_base_dirs:
+            potential_map = base_dir / 'map-keyframes'
+            if potential_map.is_dir():
+                map_dir = potential_map
+                break
         
         # Validate media-info directory exists
-        if not meta_dir.is_dir():
-            raise ValueError(f"Media info directory does not exist: {meta_dir}")
+        if not meta_dir or not meta_dir.is_dir():
+            searched_paths = [str(base_dir / 'media-info') for base_dir in possible_base_dirs]
+            raise ValueError(f"Media info directory not found in any of: {searched_paths}")
         
         # First, try to load FPS from keyframe mapping files (most reliable source)
         fps_from_keyframes = {}
-        if map_dir.is_dir():
+        if map_dir and map_dir.is_dir():
             for csv_file in map_dir.glob('*.csv'):
                 video_id = csv_file.stem
                 try:
@@ -133,9 +156,26 @@ class NitzcheCLIP:
                 results_dict[vid].append((timeframe, False))
             results_dict[vid] = sorted(results_dict[vid], key=lambda x: int(x[0][:-4]))
             
+        # Find the video frames directory (flexible path resolution)
+        be_root = Path(__file__).resolve().parent
+        frames_dirs = [
+            be_root / 'data' / 'video_frames',  # Original location
+            be_root.parent / 'aic-24-BE' / 'data' / 'video_frames',  # Alternative backend location
+            Path.cwd() / 'aic-24-BE' / 'data' / 'video_frames',  # Current working directory
+        ]
+        
+        frames_dir = None
+        for potential_frames in frames_dirs:
+            if potential_frames.exists():
+                frames_dir = potential_frames
+                break
+        
+        if not frames_dir:
+            frames_dir = be_root / 'data' / 'video_frames'  # Fallback to original
+        
         return [
             {
-                'img_path': os.path.join('./data/video_frames', vid, timeframe[0]),
+                'img_path': str(frames_dir / vid / timeframe[0]),
                 'youtube_link': self._with_time_param(self.youtube_link[vid], int(int(timeframe[0].split('.')[0]) / self.fps[vid])),
                 'fps': self.fps[vid],
                 'highlight': timeframe[1]
