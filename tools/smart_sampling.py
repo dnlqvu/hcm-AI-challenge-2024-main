@@ -48,12 +48,72 @@ import csv
 import math
 import os
 import sys
+import gc
 from dataclasses import dataclass
 from typing import Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import cv2
 import torch
+
+# Set memory management for better GPU utilization
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+
+
+def get_gpu_memory_info():
+    """Get GPU memory information in GB"""
+    if not torch.cuda.is_available():
+        return None, None
+    
+    free_memory, total_memory = torch.cuda.mem_get_info()
+    return free_memory / 1024**3, total_memory / 1024**3
+
+
+def clear_gpu_memory():
+    """Clear GPU cache and run garbage collection"""
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    gc.collect()
+
+
+def get_optimal_batch_size(model_name: str, device: str) -> int:
+    """Determine optimal batch size based on model and available memory"""
+    if device == 'cpu':
+        return 4  # Very conservative for CPU
+    
+    free_gb, total_gb = get_gpu_memory_info()
+    if free_gb is None:
+        return 4
+    
+    print(f"GPU Memory: {free_gb:.2f}GB free / {total_gb:.2f}GB total")
+    
+    # Much more conservative batch sizes, especially for large models
+    if 'ViT-L' in model_name or 'Large' in model_name:
+        print(f"⚠️ Detected large model ({model_name}), using conservative batch sizes")
+        if free_gb > 20:
+            return 8  # Even with lots of memory, be conservative
+        elif free_gb > 15:
+            return 6
+        elif free_gb > 10:
+            return 4
+        elif free_gb > 5:
+            return 2
+        else:
+            print(f"⚠️ Very low memory ({free_gb:.2f}GB), using batch size 1")
+            return 1
+    elif 'ViT-B' in model_name or 'Base' in model_name:
+        if free_gb > 15:
+            return 16
+        elif free_gb > 10:
+            return 8
+        elif free_gb > 5:
+            return 4
+        else:
+            return 2
+    else:
+        # Unknown model, be very conservative
+        print(f"⚠️ Unknown model type ({model_name}), using conservative batch size")
+        return 4
 
 
 # Try open_clip first, fall back to clip
@@ -256,22 +316,90 @@ def encode_images_clip(
     frames_bgr: Sequence[np.ndarray],
     device: str,
     use_open_clip: bool,
+    batch_size: Optional[int] = None,
 ) -> np.ndarray:
+    """
+    Encode images using CLIP with efficient batch processing to avoid OOM.
+    
+    Args:
+        model: CLIP model
+        preprocess: Preprocessing function
+        frames_bgr: List of BGR frames
+        device: Device to use ('cuda' or 'cpu')
+        use_open_clip: Whether using open_clip
+        batch_size: Batch size for processing. If None, auto-determine
+    """
+    if batch_size is None:
+        # This should not happen - batch_size should be determined in run_clip_delta
+        # Fall back to very conservative size
+        batch_size = 4
+    
+    print(f"Processing {len(frames_bgr)} frames in batches of {batch_size}")
+    
     imgs = [to_pil_image(fr) for fr in frames_bgr]
-    with torch.no_grad():
-        if use_open_clip:
-            import open_clip  # type: ignore
-
-            batch = torch.stack([preprocess(img) for img in imgs]).to(device)
-            feats = model.encode_image(batch)
-        else:
-            import clip  # type: ignore
-
-            batch = torch.stack([preprocess(img) for img in imgs]).to(device)
-            feats = model.encode_image(batch)
-        feats = feats.float()
-        feats = feats / feats.norm(dim=-1, keepdim=True).clamp(min=1e-6)
-    return feats.cpu().numpy()
+    all_feats = []
+    
+    # Process in batches to avoid OOM with retry logic
+    current_batch_size = batch_size
+    
+    for i in range(0, len(imgs), current_batch_size):
+        batch_imgs = imgs[i:i+current_batch_size]
+        
+        # Retry with smaller batch sizes if OOM occurs
+        retry_count = 0
+        max_retries = 3
+        
+        while retry_count <= max_retries:
+            try:
+                with torch.no_grad():
+                    if use_open_clip:
+                        import open_clip  # type: ignore
+                        batch = torch.stack([preprocess(img) for img in batch_imgs]).to(device)
+                        feats = model.encode_image(batch)
+                    else:
+                        import clip  # type: ignore
+                        batch = torch.stack([preprocess(img) for img in batch_imgs]).to(device)
+                        feats = model.encode_image(batch)
+                    
+                    feats = feats.float()
+                    feats = feats / feats.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+                    
+                    # Move to CPU immediately to free GPU memory
+                    all_feats.append(feats.cpu().numpy())
+                    
+                    # Clear GPU cache after each batch
+                    if device == 'cuda':
+                        torch.cuda.empty_cache()
+                    
+                    break  # Success, exit retry loop
+                    
+            except torch.cuda.OutOfMemoryError as e:
+                print(f"⚠️ OOM with batch size {len(batch_imgs)}, trying smaller batch...")
+                torch.cuda.empty_cache()
+                gc.collect()
+                
+                if retry_count == max_retries:
+                    print(f"❌ Failed after {max_retries} retries. Try using --batch-size 1 or --device cpu")
+                    raise e
+                
+                # Reduce batch size and retry with smaller batch
+                if len(batch_imgs) == 1:
+                    print(f"❌ OOM even with batch size 1! GPU memory critically low.")
+                    raise e
+                
+                # Reduce current batch and retry
+                new_size = max(1, len(batch_imgs) // 2)
+                batch_imgs = batch_imgs[:new_size]
+                current_batch_size = new_size  # Update for remaining batches
+                retry_count += 1
+                print(f"   Retrying with batch size {new_size}...")
+                
+            except Exception as e:
+                print(f"❌ Unexpected error during encoding: {e}")
+                raise e
+    
+    # Concatenate all batch results
+    return np.concatenate(all_feats, axis=0)
 
 
 def select_by_delta(
@@ -463,6 +591,7 @@ def run_clip_delta(
     exts: Tuple[str, ...],
     recursive: bool = False,
     adaptive: bool = False,
+    batch_size: Optional[int] = None,
 ) -> None:
     vids = list_videos(videos_dir, exts, recursive=recursive)
     if not vids:
@@ -472,8 +601,33 @@ def run_clip_delta(
     # Truncate output file
     open(out_csv, "w").close()
 
+    # Clear GPU memory before loading model
+    print("Clearing GPU memory before loading model...")
+    clear_gpu_memory()
+    
+    # Show memory status
+    if device == 'cuda':
+        free_gb, total_gb = get_gpu_memory_info()
+        if free_gb is not None:
+            print(f"GPU Memory before loading: {free_gb:.2f}GB free / {total_gb:.2f}GB total")
+            if free_gb < 4:
+                print(f"⚠️ Warning: Only {free_gb:.2f}GB free. May need to use CPU or smaller model.")
+
     print(f"Loading CLIP model {model_name} ({pretrained}) on {device} ...")
     model, preprocess, use_open_clip = load_clip(model_name, device, pretrained)
+    
+    # Check memory after loading model
+    if device == 'cuda':
+        free_gb, total_gb = get_gpu_memory_info()
+        if free_gb is not None:
+            print(f"GPU Memory after loading: {free_gb:.2f}GB free / {total_gb:.2f}GB total")
+    
+    # Determine batch size if not provided, using the correct model name
+    if batch_size is None:
+        batch_size = get_optimal_batch_size(model_name, device)
+        print(f"Auto-selected batch size: {batch_size}")
+    else:
+        print(f"Using specified batch size: {batch_size}")
 
     for path in vids:
         vid = basename_no_ext(path)
@@ -528,7 +682,7 @@ def run_clip_delta(
             print(f"[WARN] {vid}: failed to decode; skipping")
             continue
 
-        embs = encode_images_clip(model, preprocess, frames_bgr, device, use_open_clip)
+        embs = encode_images_clip(model, preprocess, frames_bgr, device, use_open_clip, batch_size)
         kept_indices = select_by_delta(
             embs, decode_indices, info, target_fps=current_target_fps, min_gap_sec=min_gap_sec
         )
@@ -555,6 +709,7 @@ def main() -> int:
     p.add_argument("--exts", type=str, default=".mp4,.avi,.mov,.mkv,.webm", help="Comma-separated video extensions")
     p.add_argument("--recursive", action="store_true", default=True, help="Recursively search for videos under --videos-dir (default: on)")
     p.add_argument("--adaptive", action="store_true", help="Enable intelligent content-aware adaptive sampling")
+    p.add_argument("--batch-size", type=int, help="Batch size for CLIP encoding (default: auto-determine based on GPU memory)")
     # Shot-aware params
     p.add_argument("--shot-decode-fps", type=float, default=10.0, help="Decode FPS for shot boundary detection")
     p.add_argument("--shot-long-sec", type=float, default=4.0, help="Consider shots >= this length as long (more samples)")
@@ -575,6 +730,7 @@ def main() -> int:
             exts=exts,
             recursive=args.recursive,
             adaptive=args.adaptive,
+            batch_size=args.batch_size,
         )
         print(f"Wrote selected frames -> {args.out_csv}")
         print(

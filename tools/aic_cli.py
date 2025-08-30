@@ -269,6 +269,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--model", default="ViT-L-16-SigLIP-256", help="CLIP model for analysis (clip-delta)")
     sp.add_argument("--pretrained", default="webli", help="open_clip pretrained tag (e.g., webli or hf-hub:<repo>)")
     sp.add_argument("--adaptive", action="store_true", help="Enable intelligent content-aware adaptive sampling")
+    sp.add_argument("--batch-size", type=int, help="Batch size for CLIP encoding (default: auto-determine based on GPU memory)")
     # shots params
     sp.add_argument("--shot-decode-fps", type=float, default=10.0, help="Decode FPS for shot detection")
     sp.add_argument("--shot-long-sec", type=float, default=4.0, help="Long shot threshold (sec)")
@@ -302,6 +303,8 @@ def build_parser() -> argparse.ArgumentParser:
             ]
             if args.adaptive:
                 cmd.append("--adaptive")
+            if args.batch_size is not None:
+                cmd.extend(["--batch-size", str(args.batch_size)])
         else:
             cmd += [
                 "--shot-decode-fps", str(args.shot_decode_fps),
