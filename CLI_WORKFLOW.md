@@ -47,6 +47,14 @@ What it does:
 - Packs per‑video `.npy` features into shards the backend can load
 - Builds model pickle `aic-24-BE/models/clip_vit_b32_nitzche.pkl` and updates `.env`
 
+Tip — Smart sampling (optional):
+```
+python tools/aic_cli.py sample-smart --strategy clip-delta \
+  --videos-dir <videos_root> \
+  --frames-dir aic-24-BE/data/video_frames
+```
+Recursively finds videos; extracts only selected frames (original indices preserved).
+
 ## 3) Start the Backend API
 Foreground:
 ```
@@ -59,6 +67,34 @@ python tools/aic_cli.py serve-status
 tail -n 120 hcm-AI-challenge-2024-main/aic-24-BE/uvicorn.log
 ```
 The API serves on `http://localhost:8000`.
+
+## 3b) Recompute Features (Recommended: SigLIP2)
+If you want higher recall/precision, recompute features and align the backend text encoder:
+
+1) Extract features (no Docker), choose backend and model:
+```
+python tools/aic_cli.py clip-extract-colab \
+  --videos-dir <videos_root> \
+  --outdir hero_colab_out/clip-vit_features \
+  --clip-len 1.5 \
+  --backend lighthouse-clip \
+  --model ViT-L-14-SigLIP-384 \
+  --pretrained webli
+```
+2) Convert to shards, extract exact frames, build model:
+```
+python tools/convert_hero_clip_to_shards.py --hero-clip-dir hero_colab_out/clip-vit_features \
+  --media-info aic-24-BE/data/media-info --clip-len 1.5 \
+  --outdir aic-24-BE/data/clip_features --emit-frame-list selected_frames_from_clip.csv
+python aic-24-BE/data_processing/crop_frame.py --input-dir <videos_root> --recursive \
+  --output-dir aic-24-BE/data/video_frames --frame-list selected_frames_from_clip.csv
+python tools/aic_cli.py build-model-from-shards --be-dir aic-24-BE --shards-dir aic-24-BE/data/clip_features --model-name clip_siglip.pkl
+```
+3) Set backend text encoder in `.env` to match:
+```
+CLIP_MODEL_NAME="ViT-L-14-SigLIP-384"
+CLIP_PRETRAINED="webli"
+```
 
 ## 4) Enable TRAKE (if you have transcripts/headings)
 Place JSONs with `segments` that include `text`, `start` (seconds), `fps`, `prefix`, and `frame_list` (original frame indices) into:
@@ -105,5 +141,5 @@ The archive must contain a folder named `submission/` with your CSVs.
 - Downloader needs `requests` for Google Drive links; HTTP links fall back to stdlib.
 - If KIS results are empty, ensure the model pickle exists (`aic-24-BE/models/clip_vit_b32_nitzche.pkl`) and that media‑info was copied.
 - If TRAKE results are empty, ensure Sonic is running (`docker compose ps` in `aic-24-BE`) and that you ingested transcripts/headings.
-- The backend uses OpenCLIP ViT‑B/32 text encoder to match the provided example features. If you switch feature backbones, update `aic-24-BE/nitzche_clip.py` and rebuild the model.
+- Ensure your runtime text encoder matches the recomputed features (see `.env`: `CLIP_MODEL_NAME`, `CLIP_PRETRAINED`).
 - If the exporter says connection refused, start the server with `serve --run --daemon --no-reload`, check `serve-status`, and tail `aic-24-BE/uvicorn.log`. You can add `--wait-api 30` to the export command.

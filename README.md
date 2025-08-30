@@ -39,3 +39,10 @@ Outputs:
 
 - See `GETTING_STARTED.md` for a quick CLI-only path from the provided `example_dataset` to a running backend and CSV exports.
 - For a deeper walkthrough on new datasets, see `NEW_DATASET_SETUP_GUIDE.md`.
+
+### What’s New (2025 refresh)
+- Smart sampling: `tools/smart_sampling.py` and `tools/aic_cli.py sample-smart` select frames by semantic change (CLIP‑delta) or shots; preserves original indices.
+- Colab/local recompute: `tools/aic_cli.py clip-extract-colab` re‑encodes features without Docker. Supports OpenCLIP, SigLIP/SigLIP2 models via `--model/--pretrained`, and Lighthouse decoders.
+- HERO automation: `tools/aic_cli.py hero-recompute-clip` runs HERO Docker extraction end‑to‑end, converts to shards, extracts frames, and builds the model.
+- Backend alignment: text encoder is configurable via `.env` to match recomputed features (`CLIP_MODEL_NAME`, `CLIP_PRETRAINED`, optional `CLIP_DEVICE`).
+- Notebook: `AIC-25_Colab_Textual_KIS.ipynb` reorganized with a simple path switch — Quickstart vs. Recompute (SigLIP2 by default).

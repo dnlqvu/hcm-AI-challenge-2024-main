@@ -48,17 +48,32 @@ Notes:
 - Maintain original frame indices in filenames to match scoring.
 - The system parses `video_id` and `frame_idx` from frame paths; extension doesn’t matter.
 
-## Step 3: Compute CLIP Features (Consistency Matters)
-Use the same CLIP backbone for both image features (offline) and text encoding (runtime in `nitzche_clip.py`). By default, runtime uses OpenCLIP DFN5B ViT‑H/14.
+## Step 3: Compute Features (Recommended: SigLIP2) and Keep Indices
+Use the same backbone for offline image features and runtime text encoding. We recommend SigLIP2 (L/14) for better multilingual alignment.
 
 Options:
-- If you already have packed feature pickles (each file stores `(file_path_list, image_feature)`): place them under `aic-24-BE/data/clip_features/` and skip to Step 4.
-- If you have per‑image `.npy` features or need to compute features:
-  - Compute with your chosen backbone (recommended: OpenCLIP H/14 to match runtime), then pack into shards where each shard includes:
-    - `file_path_list`: frame paths like `./data/video_frames/L21_V003/12345.jpg`
-    - `image_feature`: `[N, D]` float32 array of features aligned to the paths
-
-Important: If your features are bigG/B32, either switch runtime to the same text backbone or recompute features with H/14.
+- Quickstart (provided shards): copy existing packed features and skip to Step 4.
+- Recompute (recommended):
+  1) Smart sample to reduce redundancy while preserving events:
+     ```bash
+     python tools/aic_cli.py sample-smart --strategy clip-delta \
+       --videos-dir <videos_root> \
+       --frames-dir aic-24-BE/data/video_frames
+     ```
+  2) Encode frames and pack shards (no Docker):
+     ```bash
+     python tools/aic_cli.py clip-extract-colab \
+       --videos-dir <videos_root> \
+       --outdir hero_colab_out/clip-vit_features \
+       --clip-len 1.5 --backend lighthouse-clip \
+       --model ViT-L-14-SigLIP-384 --pretrained webli
+     python tools/convert_hero_clip_to_shards.py --hero-clip-dir hero_colab_out/clip-vit_features \
+       --media-info aic-24-BE/data/media-info --clip-len 1.5 \
+       --outdir aic-24-BE/data/clip_features --emit-frame-list selected_frames_from_clip.csv
+     python aic-24-BE/data_processing/crop_frame.py --input-dir <videos_root> --recursive \
+       --output-dir aic-24-BE/data/video_frames --frame-list selected_frames_from_clip.csv
+     ```
+  - Or HERO (Docker, GPU): `python tools/aic_cli.py hero-recompute-clip --videos-dir <videos_root> --outdir /abs/hero_out --clip-len 1.5`
 
 ## Step 4: Build the Model Pickle
 From repo root:
@@ -69,11 +84,13 @@ cd hcm-AI-challenge-2024-main/aic-24-BE
 python -c "from nitzche_clip import NitzcheCLIP; import os; os.makedirs('./models', exist_ok=True); m=NitzcheCLIP('./data/clip_features'); m.save('./models/clip_vit_h14_nitzche.pkl')"
 ```
 
-Verify `.env` points to the model:
+Verify `.env` points to the model and text encoder:
 
 ```
 MODEL_PATH="./models"
-MODEL_16="clip_vit_h14_nitzche.pkl"
+MODEL_16="clip_siglip.pkl"
+CLIP_MODEL_NAME="ViT-L-14-SigLIP-384"
+CLIP_PRETRAINED="webli"
 ```
 
 ## Step 5: Prepare ASR and Heading JSONs (for TRAKE)

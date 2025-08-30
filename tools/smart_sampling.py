@@ -416,7 +416,7 @@ def main() -> int:
     p.add_argument("--device", type=str, default=("cuda" if torch.cuda.is_available() else "cpu"))
     p.add_argument("--out-csv", type=str, default="selected_frames.csv")
     p.add_argument("--exts", type=str, default=".mp4,.avi,.mov,.mkv,.webm", help="Comma-separated video extensions")
-    p.add_argument("--recursive", action="store_true", help="Recursively search for videos under --videos-dir")
+    p.add_argument("--recursive", action="store_true", default=True, help="Recursively search for videos under --videos-dir (default: on)")
     # Shot-aware params
     p.add_argument("--shot-decode-fps", type=float, default=10.0, help="Decode FPS for shot boundary detection")
     p.add_argument("--shot-long-sec", type=float, default=4.0, help="Consider shots >= this length as long (more samples)")

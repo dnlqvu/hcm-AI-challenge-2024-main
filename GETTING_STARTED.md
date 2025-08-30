@@ -130,9 +130,12 @@ Zip the `submission/` folder for Codabench.
   - CLIP delta: `python tools/smart_sampling.py --videos-dir <videos> --strategy clip-delta --decode-fps 2.0 --target-fps 1.0 --out-csv selected_frames.csv`
   - Shot-aware (TransNetV2 if available): `python tools/smart_sampling.py --videos-dir <videos> --strategy shots --shot-decode-fps 10.0 --shot-long-sec 4.0 --out-csv selected_frames.csv`
   - Then extract exact frames via `crop_frame.py --frame-list selected_frames.csv` (above).
-- `tools/aic_cli.py sample-smart` – one-shot: run smart sampling and extract frames into the backend path:
+- `tools/aic_cli.py sample-smart` – one-shot: run smart sampling and extract frames into the backend path (recurses into subfolders by default):
   - CLIP delta: `python tools/aic_cli.py sample-smart --strategy clip-delta --videos-dir <videos> --frames-dir hcm-AI-challenge-2024-main/aic-24-BE/data/video_frames --decode-fps 2.0 --target-fps 1.0`
   - Shot-aware: `python tools/aic_cli.py sample-smart --strategy shots --videos-dir <videos> --frames-dir hcm-AI-challenge-2024-main/aic-24-BE/data/video_frames --shot-decode-fps 10.0 --shot-long-sec 4.0`
+- `tools/aic_cli.py clip-extract-colab` – recompute features without Docker (OpenCLIP/SigLIP/SigLIP2). Example (SigLIP L/14):
+  - `python tools/aic_cli.py clip-extract-colab --videos-dir <videos> --outdir hero_colab_out/clip-vit_features --clip-len 1.5 --backend lighthouse-clip --model ViT-L-14-SigLIP-384 --pretrained webli`
+  - Convert + extract + build: use `tools/convert_hero_clip_to_shards.py`, `aic-24-BE/data_processing/crop_frame.py --frame-list`, and `tools/aic_cli.py build-model-from-shards`.
 - `tools/aic_cli.py hero-recompute-clip` – fully automated HERO CLIP extraction inside Docker, conversion to shards, frame extraction, and model build:
   - `python tools/aic_cli.py hero-recompute-clip --videos-dir <videos> --outdir /abs/path/hero_output --clip-len 1.5`
   - Requires Docker + NVIDIA GPU. Outputs shards in `aic-24-BE/data/clip_features`, frames in `aic-24-BE/data/video_frames`, and model at `aic-24-BE/models/clip_vit_b32_nitzche.pkl`.
@@ -151,7 +154,10 @@ print("Selected indices at:", csv_path)
 ```
 
 ## Notes
-- The backend is configured to use OpenCLIP ViT‑B/32 for text, aligned with the provided example features (B/32). If you switch feature backbones, update `aic-24-BE/nitzche_clip.py` accordingly and rebuild the model.
+- Text encoder defaults to OpenCLIP ViT‑B/32 to match example features. If you recompute features (e.g., SigLIP2), rebuild the model and set in `.env`:
+  - `CLIP_MODEL_NAME` (e.g., `ViT-L-14-SigLIP-384`)
+  - `CLIP_PRETRAINED` (e.g., `webli` or `hf-hub:google/siglip-so400m-patch14-384`)
+  - Optional `CLIP_DEVICE=cpu|cuda`
 - Image paths now use `.jpg` directly. No `.webp` conversion is required.
 - Keep filenames inside each video folder as the original frame indices to match competition scoring.
 - If `media-info` lacks `fps`, the backend falls back to the fps column in `map-keyframes/{video_id}.csv`.

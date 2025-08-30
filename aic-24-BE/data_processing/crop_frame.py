@@ -144,7 +144,7 @@ def main() -> None:
     ap.add_argument("--frame-list", type=str, help="CSV file of frames to keep: video_id,frame or video_id,frame1,frame2,...")
     ap.add_argument("--workers", type=int, default=max(1, multiprocessing.cpu_count()), help="Max parallel worker threads for decoding")
     ap.add_argument("--exts", type=str, default=".mp4,.avi,.mov,.mkv,.webm", help="Comma-separated list of video extensions to include")
-    ap.add_argument("--recursive", action="store_true", help="Recursively search for videos under --input-dir")
+    ap.add_argument("--recursive", action="store_true", default=True, help="Recursively search for videos under --input-dir (default: on)")
     args = ap.parse_args()
 
     ensure_dir(args.output_dir)
