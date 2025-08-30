@@ -267,6 +267,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--target-fps", type=float, default=1.0, help="Target kept frames/sec (clip-delta)")
     sp.add_argument("--min-gap-sec", type=float, default=0.5, help="Minimum time gap (clip-delta)")
     sp.add_argument("--model", default="ViT-B-32", help="CLIP model for analysis (clip-delta)")
+    sp.add_argument("--pretrained", default="laion2b_s34b_b79k", help="open_clip pretrained tag (e.g., webli or hf-hub:<repo>)")
     # shots params
     sp.add_argument("--shot-decode-fps", type=float, default=10.0, help="Decode FPS for shot detection")
     sp.add_argument("--shot-long-sec", type=float, default=4.0, help="Long shot threshold (sec)")
@@ -296,6 +297,7 @@ def build_parser() -> argparse.ArgumentParser:
                 "--target-fps", str(args.target_fps),
                 "--min-gap-sec", str(args.min_gap_sec),
                 "--model", args.model,
+                "--pretrained", args.pretrained,
             ]
         else:
             cmd += [

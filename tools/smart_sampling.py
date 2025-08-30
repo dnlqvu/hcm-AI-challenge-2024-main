@@ -57,13 +57,13 @@ import torch
 
 
 # Try open_clip first, fall back to clip
-def load_clip(model_name: str = "ViT-B-32", device: str = "cpu"):
+def load_clip(model_name: str = "ViT-B-32", device: str = "cpu", pretrained: str = "laion2b_s34b_b79k"):
     try:
         import open_clip  # type: ignore
 
         model, _, preprocess = open_clip.create_model_and_transforms(
             model_name,
-            pretrained="laion2b_s34b_b79k",
+            pretrained=pretrained,
             device=device,
         )
         model.eval()
@@ -355,6 +355,7 @@ def run_clip_delta(
     videos_dir: str,
     out_csv: str,
     model_name: str,
+    pretrained: str,
     device: str,
     decode_fps: float,
     target_fps: float,
@@ -370,8 +371,8 @@ def run_clip_delta(
     # Truncate output file
     open(out_csv, "w").close()
 
-    print(f"Loading CLIP model {model_name} on {device} ...")
-    model, preprocess, use_open_clip = load_clip(model_name, device)
+    print(f"Loading CLIP model {model_name} ({pretrained}) on {device} ...")
+    model, preprocess, use_open_clip = load_clip(model_name, device, pretrained)
 
     for path in vids:
         vid = basename_no_ext(path)
@@ -413,6 +414,7 @@ def main() -> int:
     p.add_argument("--target-fps", type=float, default=1.0, help="Target average kept frames per second")
     p.add_argument("--min-gap-sec", type=float, default=0.5, help="Minimum temporal gap between kept frames")
     p.add_argument("--model", type=str, default="ViT-B-32", help="CLIP model name for clip-delta")
+    p.add_argument("--pretrained", type=str, default="laion2b_s34b_b79k", help="open_clip pretrained tag (e.g., webli or hf-hub:<repo>)")
     p.add_argument("--device", type=str, default=("cuda" if torch.cuda.is_available() else "cpu"))
     p.add_argument("--out-csv", type=str, default="selected_frames.csv")
     p.add_argument("--exts", type=str, default=".mp4,.avi,.mov,.mkv,.webm", help="Comma-separated video extensions")
@@ -429,6 +431,7 @@ def main() -> int:
             videos_dir=args.videos_dir,
             out_csv=args.out_csv,
             model_name=args.model,
+            pretrained=args.pretrained,
             device=args.device,
             decode_fps=args.decode_fps,
             target_fps=args.target_fps,
